@@ -1,0 +1,6 @@
+timestamp	kernel_type	device	status	correct	mean_seconds	notes
+2026-03-19T13:48:08.015298+00:00	rms_norm	cpu	accepted	True	0.00002338	max_abs_diff=0.000000e+00
+2026-03-19T13:48:40.979694+00:00	rms_norm	cpu	accepted	True	0.00002425	max_abs_diff=0.000000e+00
+2026-03-19T13:49:19.710094+00:00	rms_norm	cpu	accepted	True	0.00002925	max_abs_diff=0.000000e+00
+2026-03-19T13:49:21.732577+00:00	rms_norm	cpu	accepted	True	0.00002367	max_abs_diff=0.000000e+00
+2026-03-19T14:21:21.103946+00:00	rms_norm	cpu	accepted	True	0.00014371	max_abs_diff=0.000000e+00

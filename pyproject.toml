@@ -1,0 +1,13 @@
+[project]
+name = "auto-kernel"
+version = "0.1.0"
+description = "Autonomous GPU kernel optimization workflow"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "torch>=2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
