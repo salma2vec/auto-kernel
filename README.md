@@ -23,7 +23,8 @@ auto-kernel/
 ├── MEMORY.md               # Global optimization log
 ├── results.tsv             # Experiment results tracking
 ├── prepare.py              # Environment preparation and validation
-├── profile.py              # Kernel profiling and bottleneck analysis
+├── profile.py              # Macro profiling and roofline analysis
+├── ncu_profile.py          # Nsight Compute analysis and diffing
 ├── bench.py                # Benchmark harness and correctness checking
 ├── kernel.py               # The active kernel under optimization
 ├── reference.py            # Reference implementations for correctness
@@ -48,6 +49,9 @@ uv run bench.py
 
 # Profile the current kernel
 uv run profile.py
+
+# Run deep analysis
+uv run ncu_profile.py
 ```
 
 The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup.
@@ -57,11 +61,13 @@ The repository ships with `rms_norm` as the default kernel in `kernel.py`, so th
 `program.md` defines the iteration protocol. A typical loop looks like this:
 
 1. Inspect profiling data to identify the bottleneck
-2. Consult `CUDA_OPTIMIZATION.md` for possible strategies
-3. Make one focused change to `kernel.py`
-4. Run `bench.py`
-5. Keep the change if correctness holds and the result improves
-6. Record the outcome in `MEMORY.md`, `memory/<kernel>.md`, and `results.tsv`
+2. Use `profile.py` to understand the macro roofline picture
+3. Use `ncu_profile.py` to understand the specific bottleneck
+4. Consult `CUDA_OPTIMIZATION.md` for possible strategies
+5. Make one focused change to `kernel.py`
+6. Run `bench.py`
+7. Keep the change if correctness holds and the result improves
+8. Record the outcome in `MEMORY.md`, `memory/<kernel>.md`, and `results.tsv`
 
 ## Adding Your Own Kernels
 
@@ -80,6 +86,7 @@ To add a kernel for optimization:
 cp kernels/your_kernel.py kernel.py
 uv run bench.py
 uv run profile.py
+uv run ncu_profile.py
 ```
 
 ## Requirements
@@ -87,7 +94,7 @@ uv run profile.py
 - Python >= 3.9
 - PyTorch
 - [uv](https://github.com/astral-sh/uv) package manager
-- CUDA-capable GPU and CUDA profiling tools for full GPU profiling
+- CUDA-capable GPU and Nsight Compute for full GPU profiling
 
 ## License
 

@@ -1,42 +1,12 @@
 # Experiment Memory
 
-## 2026-03-19
+## Current Summary
 
-- Initialized the repository scaffold.
-- Set the built-in sample kernel target to `rms_norm`.
+- Default sample kernel: `rms_norm`
+- Best published result: baseline only
+- Deep profiling workflow: available through `ncu_profile.py`
 
+## Transferable Notes
 
-## Benchmark (2026-03-19 13:48:08Z)
-
-- kernel_type: rms_norm
-- device: cpu
-- status: accepted
-- mean_seconds: 0.00002338
-
-## Benchmark (2026-03-19 13:48:40Z)
-
-- kernel_type: rms_norm
-- device: cpu
-- status: accepted
-- mean_seconds: 0.00002425
-
-## Benchmark (2026-03-19 13:49:19Z)
-
-- kernel_type: rms_norm
-- device: cpu
-- status: accepted
-- mean_seconds: 0.00002925
-
-## Benchmark (2026-03-19 13:49:21Z)
-
-- kernel_type: rms_norm
-- device: cpu
-- status: accepted
-- mean_seconds: 0.00002367
-
-## Benchmark (2026-03-19 14:21:21Z)
-
-- kernel_type: rms_norm
-- device: cpu
-- status: accepted
-- mean_seconds: 0.00014371
+- Treat benchmark output as the macro signal and deep profiling output as the micro signal.
+- Keep one hypothesis per experiment so regressions are easy to explain.
