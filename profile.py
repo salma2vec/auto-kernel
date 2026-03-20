@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict
 
 import torch
 
-from prepare import collect_environment_report
+from prepare import collect_environment_report, resolve_device
 
 
 def _load_stdlib_profile_module():
@@ -119,7 +119,7 @@ def profile_kernel(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Profile the active kernel analytically.")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
     return parser.parse_args()
@@ -127,16 +127,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    device = resolve_device(args.device)
     module = load_kernel_module("kernel.py")
     contract = validate_kernel_module(module)
-    report = profile_kernel(contract, device=args.device, iterations=args.iterations, warmup=args.warmup)
+    report = profile_kernel(contract, device=device, iterations=args.iterations, warmup=args.warmup)
     environment = collect_environment_report()
-    mode = "ncu" if environment["ncu_available"] and args.device.startswith("cuda") else "analytical"
+    mode = "ncu" if environment["ncu_available"] and device.startswith("cuda") else "analytical"
     print(
         " ".join(
             [
                 f"kernel={contract.kernel_type}",
-                f"device={args.device}",
+                f"device={device}",
                 f"mode={mode}",
                 f"arithmetic_intensity={report.arithmetic_intensity:.4f}",
                 f"throughput_flops={report.throughput_flops:.4f}",

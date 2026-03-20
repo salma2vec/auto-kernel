@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping
 
 import torch
 
+from prepare import resolve_device
 from reference import REFERENCE_FUNCTIONS
 
 
@@ -142,7 +143,7 @@ def benchmark_kernel(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark the active kernel.")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=3)
     return parser.parse_args()
@@ -150,11 +151,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    device = resolve_device(args.device)
     module = load_kernel_module("kernel.py")
     contract = validate_kernel_module(module)
     result = benchmark_kernel(
         contract,
-        device=args.device,
+        device=device,
         iterations=args.iterations,
         warmup=args.warmup,
     )
