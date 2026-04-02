@@ -217,6 +217,274 @@ class ModelPipelineTests(unittest.TestCase):
         self.assertIn("model_optimized_total_ms=4.0000", result.stdout)
         self.assertIn("model_end_to_end_speedup=2.0000", result.stdout)
 
+    def test_verify_model_adapter_passes_shape_and_dtype_options(self) -> None:
+        workspace = self._scratch_dir("verify-model-adapter-options")
+        (workspace / "torch.py").write_text(
+            "\n".join(
+                [
+                    "class Tensor:",
+                    "    pass",
+                    "",
+                    "class _Cuda:",
+                    "    @staticmethod",
+                    "    def is_available():",
+                    "        return False",
+                    "",
+                    "cuda = _Cuda()",
+                    "Tensor = Tensor",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (workspace / "toy_model_adapter.py").write_text(
+            "\n".join(
+                [
+                    'WORKLOAD_NAME = "toy-model-adapter-options"',
+                    "",
+                    "def verify_model(",
+                    "    optimized_kernels,",
+                    "    profile,",
+                    "    device='cpu',",
+                    "    iterations=1,",
+                    "    class_name=None,",
+                    "    input_shape=None,",
+                    "    dtype='float32',",
+                    "):",
+                    "    baseline = float(sum(input_shape or (0,)))",
+                    "    optimized = baseline / 2.0 if dtype == 'float16' else baseline",
+                    "    return {",
+                    '        "correct": True,',
+                    '        "max_abs_diff": 0.0,',
+                    '        "baseline_total_ms": baseline,',
+                    '        "optimized_total_ms": optimized,',
+                    "    }",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile_path = workspace / "profile.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "workload_name": "toy-model-adapter-options",
+                    "bottlenecks": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run_script(
+            "verify.py",
+            workspace,
+            "--profile-path",
+            str(profile_path.resolve()),
+            "--model",
+            str((workspace / "toy_model_adapter.py").resolve()),
+            "--workspace-root",
+            str((workspace / "workspace").resolve()),
+            "--input-shape",
+            "2,4",
+            "--dtype",
+            "float16",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model_verify", result.stdout)
+        self.assertIn("model_baseline_total_ms=6.0000", result.stdout)
+        self.assertIn("model_optimized_total_ms=3.0000", result.stdout)
+
+    def test_profile_generic_model_contract_writes_manifest(self) -> None:
+        workspace = self._scratch_dir("profile-generic-model")
+        (workspace / "generic_model.py").write_text(
+            "\n".join(
+                [
+                    "class ScaleNorm:",
+                    "    def __init__(self, weight=2.0, eps=0.5):",
+                    "        self.weight = weight",
+                    "        self.eps = eps",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return (x * self.weight) + self.eps",
+                    "",
+                    "class ToyModel:",
+                    "    def __init__(self):",
+                    "        self.norm = ScaleNorm()",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return self.norm(x) + 1.0",
+                    "",
+                    "MODEL_TARGETS = [",
+                    "    {",
+                    '        "name": "encoder.norm",',
+                    '        "module_name": "norm",',
+                    '        "kernel_type": "rms_norm",',
+                    '        "kernel_path": "toy_kernel.py",',
+                    '        "weight_attr": "weight",',
+                    '        "eps_attr": "eps",',
+                    "    }",
+                    "]",
+                    "",
+                    "def build_model(device='cpu', dtype='float32', class_name=None):",
+                    "    return ToyModel()",
+                    "",
+                    "def build_inputs(device='cpu', input_shape=None, dtype='float32'):",
+                    "    return 3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (workspace / "toy_kernel.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "rms_norm"',
+                    "",
+                    "def kernel_fn(x, weight, eps=0.0):",
+                    "    return (x * weight) + eps",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest_path = workspace / "workspace" / "profile.json"
+
+        result = _run_script(
+            "profile.py",
+            workspace,
+            "--model",
+            str((workspace / "generic_model.py").resolve()),
+            "--manifest-out",
+            str(manifest_path.resolve()),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model", result.stdout)
+        self.assertIn("workload_name=generic_model", result.stdout)
+        self.assertIn("top_target_name=encoder.norm", result.stdout)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["bottlenecks"][0]["name"], "encoder.norm")
+        self.assertEqual(Path(manifest["bottlenecks"][0]["kernel_path"]).name, "toy_kernel.py")
+        self.assertGreaterEqual(float(manifest["bottlenecks"][0]["baseline_time_ms"]), 0.0)
+
+    def test_verify_generic_model_contract_swaps_optimized_kernel(self) -> None:
+        workspace = self._scratch_dir("verify-generic-model")
+        (workspace / "generic_model.py").write_text(
+            "\n".join(
+                [
+                    "import time",
+                    "",
+                    "class ScaleNorm:",
+                    "    def __init__(self, weight=2.0, eps=0.5):",
+                    "        self.weight = weight",
+                    "        self.eps = eps",
+                    "",
+                    "    def __call__(self, x):",
+                    "        time.sleep(0.002)",
+                    "        return (x * self.weight) + self.eps",
+                    "",
+                    "class ToyModel:",
+                    "    def __init__(self):",
+                    "        self.norm = ScaleNorm()",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return self.norm(x) + 1.0",
+                    "",
+                    "MODEL_TARGETS = [",
+                    "    {",
+                    '        "name": "encoder.norm",',
+                    '        "module_name": "norm",',
+                    '        "kernel_type": "rms_norm",',
+                    '        "kernel_path": "toy_kernel.py",',
+                    '        "weight_attr": "weight",',
+                    '        "eps_attr": "eps",',
+                    "    }",
+                    "]",
+                    "",
+                    "def build_model(device='cpu', dtype='float32', class_name=None):",
+                    "    return ToyModel()",
+                    "",
+                    "def build_inputs(device='cpu', input_shape=None, dtype='float32'):",
+                    "    return 3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (workspace / "toy_kernel.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "rms_norm"',
+                    "",
+                    "def kernel_fn(x, weight, eps=0.0):",
+                    "    return (x * weight) + eps",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile_path = workspace / "profile.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "workload_name": "generic_model",
+                    "bottlenecks": [
+                        {
+                            "rank": 1,
+                            "name": "encoder.norm",
+                            "kernel_type": "rms_norm",
+                            "time_share": 1.0,
+                            "kernel_path": str((workspace / "toy_kernel.py").resolve()),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        optimized_dir = workspace / "workspace" / "optimized"
+        optimized_dir.mkdir(parents=True, exist_ok=True)
+        (optimized_dir / "rms_norm--encoder_norm.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "rms_norm"',
+                    "",
+                    "def kernel_fn(x, weight, eps=0.0):",
+                    "    return (x * weight) + eps",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = _run_script(
+            "verify.py",
+            workspace,
+            "--profile-path",
+            str(profile_path.resolve()),
+            "--model",
+            str((workspace / "generic_model.py").resolve()),
+            "--workspace-root",
+            str((workspace / "workspace").resolve()),
+            "--iterations",
+            "3",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model_verify", result.stdout)
+        self.assertIn("model_correctness=PASS", result.stdout)
+        self.assertIn("model_optimized_kernel_count=1", result.stdout)
+        values = dict(
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if "=" in line
+        )
+        self.assertGreater(
+            float(values["model_baseline_total_ms"]),
+            float(values["model_optimized_total_ms"]),
+        )
+        self.assertGreater(float(values["model_end_to_end_speedup"]), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
