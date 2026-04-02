@@ -21,6 +21,7 @@ from bench import (
     validate_kernel_module,
 )
 from prepare import collect_environment_report, resolve_device
+from auto_kernel.workloads import load_workload_module, workload_entries, workload_name
 
 
 def _load_stdlib_profile_module():
@@ -97,11 +98,95 @@ def profile_kernel(contract, device: str, iterations: int, warmup: int) -> Profi
     )
 
 
+def profile_workload_entry(
+    entry: dict,
+    source_dir: Path,
+    device: str,
+    iterations: int,
+    warmup: int,
+) -> dict:
+    if "baseline_time_ms" in entry:
+        return {
+            "name": entry["name"],
+            "kernel_type": entry["kernel_type"],
+            "kernel_path": str(entry["kernel_path"]),
+            "baseline_time_ms": float(entry["baseline_time_ms"]),
+            "input_kwargs": dict(entry.get("input_kwargs", {})),
+        }
+
+    kernel_path = Path(str(entry["kernel_path"]))
+    if not kernel_path.is_absolute():
+        kernel_path = (source_dir / kernel_path).resolve()
+    module = load_kernel_module(str(kernel_path))
+    contract = validate_kernel_module(module)
+
+    input_kwargs = dict(entry.get("input_kwargs", {}))
+    inputs = contract.get_inputs(device=device, **input_kwargs)
+
+    def run_once() -> None:
+        contract.kernel_fn(**_clone_tree(inputs))
+        _sync_if_needed(device)
+
+    for _ in range(warmup):
+        run_once()
+
+    start = perf_counter()
+    for _ in range(iterations):
+        run_once()
+    elapsed_seconds = (perf_counter() - start) / iterations
+
+    return {
+        "name": entry["name"],
+        "kernel_type": entry.get("kernel_type", contract.kernel_type),
+        "kernel_path": str(kernel_path),
+        "baseline_time_ms": elapsed_seconds * 1000.0,
+        "input_kwargs": input_kwargs,
+    }
+
+
+def build_workload_manifest(
+    workload_path: Path,
+    device: str,
+    iterations: int,
+    warmup: int,
+) -> dict:
+    module = load_workload_module(str(workload_path))
+    entries = workload_entries(module)
+    workload_records = [
+        profile_workload_entry(entry, workload_path.parent, device, iterations, warmup)
+        for entry in entries
+    ]
+    ordered = sorted(workload_records, key=lambda record: record["baseline_time_ms"], reverse=True)
+    total_time_ms = sum(record["baseline_time_ms"] for record in ordered)
+    bottlenecks = []
+    for index, record in enumerate(ordered, start=1):
+        time_share = 0.0 if total_time_ms <= 0 else record["baseline_time_ms"] / total_time_ms
+        bottlenecks.append(
+            {
+                "rank": index,
+                "name": record["name"],
+                "kernel_type": record["kernel_type"],
+                "kernel_path": record["kernel_path"],
+                "baseline_time_ms": record["baseline_time_ms"],
+                "time_share": time_share,
+                "input_kwargs": record.get("input_kwargs", {}),
+            }
+        )
+
+    return {
+        "workload_name": workload_name(module, workload_path),
+        "device": device,
+        "total_time_ms": total_time_ms,
+        "bottlenecks": bottlenecks,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Profile the active kernel.")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--workload", default=None)
     parser.add_argument("--manifest-out", default=None)
     parser.add_argument("--name", default=None)
     return parser.parse_args()
@@ -110,6 +195,31 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     device = resolve_device(args.device)
+    if args.workload:
+        workload_manifest = build_workload_manifest(
+            workload_path=Path(args.workload).resolve(),
+            device=device,
+            iterations=args.iterations,
+            warmup=args.warmup,
+        )
+        print(f"workload_name={workload_manifest['workload_name']}")
+        print(f"device={device}")
+        print(f"mode=workload")
+        print(f"total_time_ms={workload_manifest['total_time_ms']:.4f}")
+        print(f"bottleneck_count={len(workload_manifest['bottlenecks'])}")
+        if workload_manifest["bottlenecks"]:
+            print(f"top_kernel_type={workload_manifest['bottlenecks'][0]['kernel_type']}")
+            print(f"top_target_name={workload_manifest['bottlenecks'][0]['name']}")
+        if args.manifest_out:
+            manifest_path = Path(args.manifest_out)
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(workload_manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            print(f"manifest_path={manifest_path}")
+        return 0
+
     module = load_kernel_module("kernel.py")
     contract = validate_kernel_module(module)
     report = profile_kernel(contract, device=device, iterations=args.iterations, warmup=args.warmup)
