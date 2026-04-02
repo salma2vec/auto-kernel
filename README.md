@@ -4,15 +4,15 @@ Autonomous GPU kernel optimization workflow.
 
 ## Overview
 
-`auto-kernel` helps you profile, analyze, and optimize GPU kernels through iterative experimentation. Given a kernel, the workflow:
+`auto-kernel` helps you profile, extract, and optimize GPU kernels through iterative experimentation. The workflow is built around a single editable file, `kernel.py`, so experiments stay reviewable and easy to revert.
 
-1. **Profiles** the kernel to understand whether it is compute-bound or memory-bound
-2. **Proposes** an optimization hypothesis based on the optimization guide
-3. **Modifies** the kernel code
-4. **Benchmarks** the modified kernel against the reference implementation
-5. **Decides** whether to keep or discard the change
-6. **Logs** the result to `MEMORY.md`, per-kernel memory, and `results.tsv`
-7. **Repeats** until the results are satisfactory
+1. **Profiles** either the active kernel or a workload file into a ranked manifest
+2. **Extracts** the selected bottleneck into `kernel.py`
+3. **Benchmarks** the active kernel against the reference implementation
+4. **Decides** whether to keep or discard the change
+5. **Logs** the result to `MEMORY.md`, per-kernel memory, and `results.tsv`
+6. **Orchestrates** the next target using Amdahl-style time-share reasoning
+7. **Verifies** the projected end-to-end speedup from recorded kernel improvements
 
 ## Project Structure
 
@@ -23,15 +23,21 @@ auto-kernel/
 ├── MEMORY.md               # Global optimization log
 ├── results.tsv             # Experiment results tracking
 ├── prepare.py              # Environment preparation and validation
-├── profile.py              # Macro profiling and roofline analysis
+├── profile.py              # Kernel profiling and workload manifest generation
+├── extract.py              # Activates a profiled bottleneck in kernel.py
+├── orchestrate.py          # Recommends the next kernel to optimize
+├── verify.py               # Reports aggregate end-to-end speedup
 ├── ncu_profile.py          # Nsight Compute analysis and diffing
 ├── bench.py                # Benchmark harness and correctness checking
 ├── kernel.py               # The active kernel under optimization
 ├── reference.py            # Reference implementations for correctness
 ├── kernels/                # Baseline kernels
 ├── kernels_optimized/      # Saved optimized kernels
+├── models/                 # Example workload definitions
+├── auto_kernel/            # Shared helpers for manifests and orchestration
 ├── memory/                 # Per-kernel experiment logs
 ├── ncu_reports/            # Profiling artifacts
+├── workspace/              # Runtime manifests and active selections (gitignored)
 └── pyproject.toml
 ```
 
@@ -50,8 +56,18 @@ uv run bench.py
 # Profile the current kernel
 uv run profile.py
 
+# Generate a workload manifest
+uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
+
+# Activate the top bottleneck in kernel.py
+uv run extract.py --profile-path workspace/profile.json
+
 # Run deep analysis
 uv run ncu_profile.py
+
+# Recommend the next kernel and report aggregate impact
+uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
+uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
 ```
 
 The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup. By default, `bench.py` and `profile.py` now auto-select CUDA when it is available and fall back to CPU otherwise.
@@ -60,14 +76,29 @@ The repository ships with `rms_norm` as the default kernel in `kernel.py`, so th
 
 `program.md` defines the iteration protocol. A typical loop looks like this:
 
-1. Inspect profiling data to identify the bottleneck
-2. Use `profile.py` to understand the macro roofline picture
-3. Use `ncu_profile.py` to understand the specific bottleneck
-4. Consult `CUDA_OPTIMIZATION.md` for possible strategies
+1. Use `profile.py --workload ... --manifest-out workspace/profile.json` to rank the workload bottlenecks
+2. Use `extract.py` to make the top bottleneck the active `kernel.py`
+3. Use `profile.py` and `ncu_profile.py` to understand the bottleneck
+4. Consult `CUDA_OPTIMIZATION.md` for strategies
 5. Make one focused change to `kernel.py`
 6. Run `bench.py`
 7. Keep the change if correctness holds and the result improves
-8. Record the outcome in `MEMORY.md`, `memory/<kernel>.md`, and `results.tsv`
+8. Use `orchestrate.py` and `verify.py` to track the next target and total impact
+9. Record important notes in `MEMORY.md` and `memory/<kernel>.md`
+
+## Workload-Driven Loop
+
+The workload path is the bridge from a model or workload definition to the single-kernel hot loop:
+
+```bash
+uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
+uv run extract.py --profile-path workspace/profile.json
+uv run bench.py --hypothesis "baseline"
+uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
+uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
+```
+
+If your environment does not support `uv run`, the scripts can also be invoked directly with `python3`.
 
 ## Adding Your Own Kernels
 
@@ -88,6 +119,13 @@ uv run bench.py
 uv run profile.py
 uv run ncu_profile.py
 ```
+
+To add a workload entry point, create a module under `models/` that exports either `get_workload()` or `WORKLOAD`. Each entry should include:
+
+- `name`
+- `kernel_type`
+- `kernel_path`
+- either `baseline_time_ms` for static manifests or `input_kwargs` for real kernel timing
 
 ## Requirements
 

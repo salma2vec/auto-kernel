@@ -31,7 +31,21 @@ Each kernel type must also have a benchmark config in `bench.py` under `KERNEL_C
 1. Run `uv run prepare.py` to validate the environment.
 2. Read `CUDA_OPTIMIZATION.md` to review known optimization patterns and anti-patterns.
 3. Read `MEMORY.md` for the global optimization summary.
-4. Select a kernel to optimize:
+4. If you are starting from a workload, generate a ranked profile manifest:
+
+   ```bash
+   uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
+   ```
+
+5. Select a kernel to optimize:
+
+   From a workload manifest:
+
+   ```bash
+   uv run extract.py --profile-path workspace/profile.json
+   ```
+
+   Or manually:
 
    ```bash
    cp kernels/<kernel>.py kernel.py
@@ -43,9 +57,9 @@ Each kernel type must also have a benchmark config in `bench.py` under `KERNEL_C
    cp kernels_optimized/<kernel>.py kernel.py
    ```
 
-5. Read `memory/<kernel_type>.md` if it exists.
-6. Read `kernel.py` to understand the current implementation.
-7. Read `reference.py` to understand the correctness target.
+6. Read `memory/<kernel_type>.md` if it exists.
+7. Read `kernel.py` to understand the current implementation.
+8. Read `reference.py` to understand the correctness target.
 
 ## Experiment Loop
 
@@ -66,7 +80,7 @@ uv run bench.py --quick > run.log 2>&1
 Extract the key metrics from `run.log`:
 
 ```bash
-grep "experiment_id\|correctness\|throughput_tflops\|bandwidth_gb_s\|pct_peak_compute\|pct_peak_bandwidth\|bottleneck\|speedup_vs_pytorch\|peak_vram_mb" run.log
+grep "kernel=\|experiment_id\|correctness\|throughput_tflops\|bandwidth_gb_s\|pct_peak_compute\|pct_peak_bandwidth\|bottleneck\|speedup_vs_pytorch\|peak_vram_mb" run.log
 ```
 
 ### Step 2: Macro Performance Analysis
@@ -143,6 +157,7 @@ Update:
 - `memory/<kernel_type>.md`
 - `MEMORY.md`
 - `CUDA_OPTIMIZATION.md` when you discover a reusable pattern or anti-pattern
+- `workspace/profile.json` as you refresh workload rankings
 
 ### Step 9: Repeat
 
@@ -167,6 +182,17 @@ cp kernels/<next_kernel>.py kernel.py
 ```
 
 Save optimized kernel results before leaving a kernel, and review its per-kernel memory before resuming later.
+
+## End-to-End Tracking
+
+Use the recorded results and workload manifest together:
+
+```bash
+uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
+uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
+```
+
+`orchestrate.py` recommends the next kernel based on recorded best speedups and time share. `verify.py` reports the current projected end-to-end speedup from all recorded improvements.
 
 ## Important Rules
 
