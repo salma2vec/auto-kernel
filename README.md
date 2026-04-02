@@ -6,7 +6,7 @@ Autonomous GPU kernel optimization workflow.
 
 `auto-kernel` helps you profile, extract, and optimize GPU kernels through iterative experimentation. The workflow is built around a single editable file, `kernel.py`, so experiments stay reviewable and easy to revert.
 
-1. **Profiles** either the active kernel or a workload file into a ranked manifest
+1. **Profiles** either the active kernel, a workload file, or a model adapter into a ranked manifest
 2. **Extracts** the selected bottleneck into `kernel.py`
 3. **Benchmarks** the active kernel against the reference implementation
 4. **Decides** whether to keep or discard the change
@@ -59,6 +59,9 @@ uv run profile.py
 # Generate a workload manifest
 uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
 
+# Or profile a live model adapter
+uv run profile.py --model models/rms_norm_model.py --input-shape 4,128,512 --manifest-out workspace/profile.json
+
 # Activate the top bottleneck in kernel.py
 uv run extract.py --profile-path workspace/profile.json
 
@@ -74,6 +77,9 @@ uv run verify.py --profile-path workspace/profile.json --results-path results.ts
 
 # Measure the workload against saved optimized artifacts
 uv run verify.py --profile-path workspace/profile.json --workspace-root workspace --measure-workload
+
+# Or verify the optimized kernels back inside the model
+uv run verify.py --profile-path workspace/profile.json --model models/rms_norm_model.py --input-shape 4,128,512
 ```
 
 The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup. By default, `bench.py` and `profile.py` now auto-select CUDA when it is available and fall back to CPU otherwise.
@@ -108,6 +114,37 @@ If your environment does not support `uv run`, the scripts can also be invoked d
 
 When you keep an experiment with `uv run bench.py --kept yes`, the active `kernel.py` snapshot is saved under `workspace/optimized/`. You can resume that best-known variant later with `extract.py --prefer-optimized`.
 
+## Model-Driven Loop
+
+The model path is the new bridge toward live-model parity. You can point `profile.py` and `verify.py` at a model module instead of hand-authoring a workload manifest:
+
+```bash
+uv run profile.py --model models/rms_norm_model.py --input-shape 4,128,512 --manifest-out workspace/profile.json
+uv run extract.py --profile-path workspace/profile.json
+uv run bench.py --hypothesis "baseline"
+uv run verify.py --profile-path workspace/profile.json --model models/rms_norm_model.py --input-shape 4,128,512
+```
+
+Model modules can use one of two contracts:
+
+1. Explicit adapters:
+   - export `trace_model(...)` to produce ranked bottlenecks
+   - export `verify_model(...)` to run end-to-end correctness and timing
+2. Generic adapters:
+   - export `build_model(...)`
+   - export `build_inputs(...)`
+   - export `MODEL_TARGETS`
+
+Each `MODEL_TARGETS` entry should include:
+
+- `name`
+- `module_name`
+- `kernel_type`
+- optional `kernel_path`
+- optional `weight_attr` and `eps_attr` for `rms_norm`
+
+The generic tracing path times the declared target modules inside the running model. The generic reintegration path currently ships built-in replacement logic for `rms_norm`; other kernel types should still provide a custom `verify_model(...)` adapter.
+
 ## Adding Your Own Kernels
 
 To add a kernel for optimization:
@@ -136,6 +173,8 @@ To add a workload entry point, create a module under `models/` that exports eith
 - either `baseline_time_ms` for static manifests or `input_kwargs` for real kernel timing
 
 See [models/custom.py](/Users/salma/auto-kernel/models/custom.py) for a starting template.
+
+To add a model adapter, create a module under `models/` that exports either the explicit adapter hooks or the generic contract described above. See [models/rms_norm_model.py](/Users/salma/auto-kernel/models/rms_norm_model.py) for a concrete example.
 
 ## Requirements
 

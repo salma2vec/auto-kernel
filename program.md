@@ -37,6 +37,12 @@ Each kernel type must also have a benchmark config in `bench.py` under `KERNEL_C
    uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
    ```
 
+   If you are starting from a live model adapter instead:
+
+   ```bash
+   uv run profile.py --model models/rms_norm_model.py --input-shape 4,128,512 --manifest-out workspace/profile.json
+   ```
+
 5. Select a kernel to optimize:
 
    From a workload manifest:
@@ -213,6 +219,19 @@ To measure the declared workload against saved optimized artifacts instead of on
 ```bash
 uv run verify.py --profile-path workspace/profile.json --workspace-root workspace --measure-workload
 ```
+
+To verify optimized kernels back inside a running model adapter:
+
+```bash
+uv run verify.py --profile-path workspace/profile.json --model models/rms_norm_model.py --input-shape 4,128,512
+```
+
+Model adapters can be explicit or generic:
+
+- Explicit adapters export `trace_model(...)` and `verify_model(...)`.
+- Generic adapters export `build_model(...)`, `build_inputs(...)`, and `MODEL_TARGETS`.
+
+The generic model path now times declared target modules directly from the running model. Built-in reintegration support currently targets `rms_norm`; other kernel types should continue to provide a custom `verify_model(...)` implementation until more replacement modules are added.
 
 ## Important Rules
 
