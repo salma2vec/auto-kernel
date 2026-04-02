@@ -54,7 +54,7 @@ uv run profile.py
 uv run ncu_profile.py
 ```
 
-The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup.
+The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup. By default, `bench.py` and `profile.py` now auto-select CUDA when it is available and fall back to CPU otherwise.
 
 ## How It Works
 
