@@ -45,6 +45,12 @@ Each kernel type must also have a benchmark config in `bench.py` under `KERNEL_C
    uv run extract.py --profile-path workspace/profile.json
    ```
 
+   To resume from the best saved artifact for a target instead of the baseline source:
+
+   ```bash
+   uv run extract.py --profile-path workspace/profile.json --prefer-optimized
+   ```
+
    Or manually:
 
    ```bash
@@ -149,6 +155,14 @@ uv run bench.py --experiment-id <id> --hypothesis "<hypothesis>" > run.log 2>&1
 | correctness = PASS and performance improves materially | keep the change |
 | correctness = PASS and performance is flat or worse | discard the change |
 
+If you keep a result, mark it explicitly:
+
+```bash
+uv run bench.py --experiment-id <id> --hypothesis "<hypothesis>" --kept yes
+```
+
+This saves the current `kernel.py` as the best-known artifact for the active target under `workspace/optimized/`.
+
 ### Step 8: Record
 
 Update:
@@ -193,6 +207,12 @@ uv run verify.py --profile-path workspace/profile.json --results-path results.ts
 ```
 
 `orchestrate.py` recommends the next kernel based on recorded best speedups and time share. `verify.py` reports the current projected end-to-end speedup from all recorded improvements.
+
+To measure the declared workload against saved optimized artifacts instead of only using projected speedups:
+
+```bash
+uv run verify.py --profile-path workspace/profile.json --workspace-root workspace --measure-workload
+```
 
 ## Important Rules
 

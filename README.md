@@ -62,12 +62,18 @@ uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/p
 # Activate the top bottleneck in kernel.py
 uv run extract.py --profile-path workspace/profile.json
 
+# Resume from the best saved variant for that target if one exists
+uv run extract.py --profile-path workspace/profile.json --prefer-optimized
+
 # Run deep analysis
 uv run ncu_profile.py
 
 # Recommend the next kernel and report aggregate impact
 uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
 uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
+
+# Measure the workload against saved optimized artifacts
+uv run verify.py --profile-path workspace/profile.json --workspace-root workspace --measure-workload
 ```
 
 The repository ships with `rms_norm` as the default kernel in `kernel.py`, so the loop works immediately after setup. By default, `bench.py` and `profile.py` now auto-select CUDA when it is available and fall back to CPU otherwise.
@@ -100,6 +106,8 @@ uv run verify.py --profile-path workspace/profile.json --results-path results.ts
 
 If your environment does not support `uv run`, the scripts can also be invoked directly with `python3`.
 
+When you keep an experiment with `uv run bench.py --kept yes`, the active `kernel.py` snapshot is saved under `workspace/optimized/`. You can resume that best-known variant later with `extract.py --prefer-optimized`.
+
 ## Adding Your Own Kernels
 
 To add a kernel for optimization:
@@ -126,6 +134,8 @@ To add a workload entry point, create a module under `models/` that exports eith
 - `kernel_type`
 - `kernel_path`
 - either `baseline_time_ms` for static manifests or `input_kwargs` for real kernel timing
+
+See [models/custom.py](/Users/salma/auto-kernel/models/custom.py) for a starting template.
 
 ## Requirements
 
