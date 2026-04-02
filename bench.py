@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 import torch
 
+from auto_kernel.artifacts import persist_optimized_kernel
 from auto_kernel.workspace import active_kernel_manifest_path, read_json
 from prepare import resolve_device
 from reference import REFERENCE_FUNCTIONS
@@ -123,6 +124,74 @@ def _rms_norm_edge_cases(contract: KernelContract, device: str) -> Iterable[Tupl
     ]
 
 
+def _linear_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+        out_features=hidden_size,
+    )
+
+
+def _linear_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8, out_features=8)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    ones = _clone_tree(base)
+    ones["x"] = torch.ones_like(ones["x"])
+    return [
+        ("zeros", zeros),
+        ("ones", ones),
+    ]
+
+
+def _softmax_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+        dim=-1,
+    )
+
+
+def _softmax_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8, dim=-1)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    large = _clone_tree(base)
+    large["x"] = torch.full_like(large["x"], 1e3)
+    return [
+        ("zeros", zeros),
+        ("large_values", large),
+    ]
+
+
+def _layer_norm_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+    )
+
+
+def _layer_norm_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    ones = _clone_tree(base)
+    ones["x"] = torch.ones_like(ones["x"])
+    return [
+        ("zeros", zeros),
+        ("ones", ones),
+    ]
+
+
 KERNEL_CONFIGS: Dict[str, BenchmarkConfig] = {
     "rms_norm": BenchmarkConfig(
         quick_shapes=((2, 4, 8), (4, 8, 16)),
@@ -135,7 +204,43 @@ KERNEL_CONFIGS: Dict[str, BenchmarkConfig] = {
         default_warmup=5,
         input_builder=_rms_norm_input_builder,
         edge_case_builder=_rms_norm_edge_cases,
-    )
+    ),
+    "linear": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_linear_input_builder,
+        edge_case_builder=_linear_edge_cases,
+    ),
+    "softmax": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_softmax_input_builder,
+        edge_case_builder=_softmax_edge_cases,
+    ),
+    "layer_norm": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_layer_norm_input_builder,
+        edge_case_builder=_layer_norm_edge_cases,
+    ),
 }
 
 
@@ -528,6 +633,17 @@ def main() -> int:
     append_memory_note(Path("MEMORY.md"), f"Experiment {experiment_id}", memory_lines)
     append_memory_note(Path("memory") / f"{contract.kernel_type}.md", f"Experiment {experiment_id}", memory_lines)
 
+    artifact_path = ""
+    if args.kept == "yes" and correctness_label == "PASS" and active_context:
+        updated_context = persist_optimized_kernel(
+            workspace_root=Path("workspace"),
+            kernel_file=Path("kernel.py"),
+            active_manifest=active_context,
+            speedup_vs_reference=metrics.speedup_vs_pytorch,
+            experiment_id=experiment_id,
+        )
+        artifact_path = str(updated_context.get("optimized_kernel_path", ""))
+
     print(f"kernel={contract.kernel_type}")
     print(f"device={device}")
     print(f"experiment_id={experiment_id}")
@@ -545,6 +661,8 @@ def main() -> int:
     print(f"peak_vram_mb={metrics.peak_vram_mb:.2f}")
     print(f"peak_source={metrics.peak_source}")
     print(f"kept={args.kept}")
+    if artifact_path:
+        print(f"optimized_kernel_path={artifact_path}")
     return 0 if correctness_label == "PASS" else 1
 
 

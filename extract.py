@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, List
 
+from auto_kernel.artifacts import resolve_optimized_kernel
 from auto_kernel.workspace import active_kernel_manifest_path, ensure_workspace, read_json, write_json
 
 
@@ -13,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kernel-file", default="kernel.py")
     parser.add_argument("--rank", type=int, default=1)
     parser.add_argument("--kernel-type", default=None)
+    parser.add_argument("--prefer-optimized", action="store_true")
     return parser.parse_args()
 
 
@@ -47,6 +49,17 @@ def main() -> int:
     record = select_bottleneck(profile.get("bottlenecks", []), args.rank, args.kernel_type)
 
     source_kernel = resolve_source_kernel(profile_path, record)
+    source_kind = "baseline"
+    if args.prefer_optimized:
+        optimized_kernel = resolve_optimized_kernel(
+            workspace_root,
+            str(record["kernel_type"]),
+            str(record.get("name", record.get("kernel_type"))),
+        )
+        if optimized_kernel.exists():
+            source_kernel = optimized_kernel
+            source_kind = "optimized"
+
     destination_kernel = Path(args.kernel_file).resolve()
     shutil.copy2(source_kernel, destination_kernel)
 
@@ -55,15 +68,19 @@ def main() -> int:
         "name": record.get("name", record.get("kernel_type")),
         "kernel_type": record["kernel_type"],
         "kernel_path": str(source_kernel),
+        "baseline_kernel_path": str(resolve_source_kernel(profile_path, record)),
         "rank": int(record.get("rank", 0) or 0),
         "time_share": float(record.get("time_share", 0.0) or 0.0),
+        "source_kind": source_kind,
     }
     for key, value in record.items():
         active_manifest.setdefault(str(key), value)
+    active_manifest["kernel_path"] = str(source_kernel)
     write_json(active_kernel_manifest_path(workspace_root), active_manifest)
 
     print(f"selected_kernel_type={active_manifest['kernel_type']}")
     print(f"selected_target_name={active_manifest['name']}")
+    print(f"source_kind={source_kind}")
     print(f"workspace_root={workspace_root}")
     print(f"kernel_file={destination_kernel}")
     return 0

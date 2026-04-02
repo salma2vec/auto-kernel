@@ -27,6 +27,11 @@ def _copy_workflow_fixture(destination: Path) -> None:
         shutil.copy2(REPO_ROOT / relative_path, destination / relative_path)
 
     shutil.copytree(REPO_ROOT / "kernels", destination / "kernels")
+    shutil.copytree(
+        REPO_ROOT / "auto_kernel",
+        destination / "auto_kernel",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
 
 
 class EndToEndWorkflowTests(unittest.TestCase):
