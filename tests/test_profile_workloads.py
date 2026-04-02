@@ -34,11 +34,13 @@ def _run_profile(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 class WorkloadProfileTests(unittest.TestCase):
     def _scratch_dir(self, name: str) -> Path:
-        root = REPO_ROOT / ".tmp_test_workspaces" / name
+        base = REPO_ROOT / ".tmp" / "test_workspaces"
+        base.mkdir(parents=True, exist_ok=True)
+        root = base / name
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        self.addCleanup(lambda root=root: shutil.rmtree(root, ignore_errors=True))
         return root
 
     def test_profile_workload_writes_ranked_manifest(self) -> None:
@@ -86,7 +88,11 @@ class WorkloadProfileTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        shutil.copytree(REPO_ROOT / "kernels", workspace / "kernels")
+        shutil.copytree(
+            REPO_ROOT / "kernels",
+            workspace / "kernels",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         manifest_path = workspace / "workspace" / "profile.json"
 
         result = _run_profile(

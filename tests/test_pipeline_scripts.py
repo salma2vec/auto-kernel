@@ -32,16 +32,22 @@ def _run_script(script_name: str, cwd: Path, *args: str) -> subprocess.Completed
 
 class PipelineScriptTests(unittest.TestCase):
     def _scratch_dir(self, name: str) -> Path:
-        root = REPO_ROOT / ".tmp_test_workspaces" / name
+        base = REPO_ROOT / ".tmp" / "test_workspaces"
+        base.mkdir(parents=True, exist_ok=True)
+        root = base / name
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        self.addCleanup(lambda root=root: shutil.rmtree(root, ignore_errors=True))
         return root
 
     def test_extract_writes_active_manifest_and_copies_kernel(self) -> None:
         workspace = self._scratch_dir("extract-script")
-        shutil.copytree(REPO_ROOT / "kernels", workspace / "kernels")
+        shutil.copytree(
+            REPO_ROOT / "kernels",
+            workspace / "kernels",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         (workspace / "kernel.py").write_text("# placeholder\n", encoding="utf-8")
         profile_path = workspace / "profile.json"
         profile_path.write_text(
@@ -82,7 +88,11 @@ class PipelineScriptTests(unittest.TestCase):
 
     def test_extract_prefers_saved_optimized_kernel_when_requested(self) -> None:
         workspace = self._scratch_dir("extract-optimized-script")
-        shutil.copytree(REPO_ROOT / "kernels", workspace / "kernels")
+        shutil.copytree(
+            REPO_ROOT / "kernels",
+            workspace / "kernels",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         optimized_dir = workspace / "workspace" / "optimized"
         optimized_dir.mkdir(parents=True, exist_ok=True)
         optimized_kernel = optimized_dir / "rms_norm--encoder_block0_rms_norm.py"
