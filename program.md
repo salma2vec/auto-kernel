@@ -229,9 +229,11 @@ uv run verify.py --profile-path workspace/profile.json --model models/rms_norm_m
 Model adapters can be explicit or generic:
 
 - Explicit adapters export `trace_model(...)` and `verify_model(...)`.
-- Generic adapters export `build_model(...)`, `build_inputs(...)`, and `MODEL_TARGETS`.
+- Generic adapters export `build_model(...)`, `build_inputs(...)`, and optionally `MODEL_TARGETS`.
 
-The generic model path now times declared target modules directly from the running model. Built-in reintegration support currently targets `rms_norm`; other kernel types should continue to provide a custom `verify_model(...)` implementation until more replacement modules are added.
+If `MODEL_TARGETS` is omitted, the generic model path can now auto-discover supported leaf modules from `named_modules()` for common PyTorch-style classes such as `RMSNorm`, `LayerNorm`, `Linear`, and `Softmax`.
+
+The generic model path now times declared or discovered target modules directly from the running model. Built-in reintegration support now uses binding-driven replacement logic so multiple kernel types can be swapped without a custom `verify_model(...)` adapter.
 
 ## Important Rules
 

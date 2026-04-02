@@ -485,6 +485,266 @@ class ModelPipelineTests(unittest.TestCase):
         )
         self.assertGreater(float(values["model_end_to_end_speedup"]), 1.0)
 
+    def test_verify_generic_model_contract_supports_linear_replacement(self) -> None:
+        workspace = self._scratch_dir("verify-generic-linear-model")
+        (workspace / "generic_model.py").write_text(
+            "\n".join(
+                [
+                    "import time",
+                    "",
+                    "class Linear:",
+                    "    def __init__(self, weight=2.0, bias=0.5):",
+                    "        self.weight = weight",
+                    "        self.bias = bias",
+                    "",
+                    "    def __call__(self, x):",
+                    "        time.sleep(0.002)",
+                    "        return (x * self.weight) + self.bias",
+                    "",
+                    "class ToyModel:",
+                    "    def __init__(self):",
+                    "        self.proj = Linear()",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return self.proj(x) + 1.0",
+                    "",
+                    "MODEL_TARGETS = [",
+                    "    {",
+                    '        "name": "proj",',
+                    '        "module_name": "proj",',
+                    '        "kernel_type": "linear",',
+                    '        "kernel_path": "toy_linear.py",',
+                    "    }",
+                    "]",
+                    "",
+                    "def build_model(device='cpu', dtype='float32', class_name=None):",
+                    "    return ToyModel()",
+                    "",
+                    "def build_inputs(device='cpu', input_shape=None, dtype='float32'):",
+                    "    return 3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (workspace / "toy_linear.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "linear"',
+                    "",
+                    "def kernel_fn(x, weight, bias=0.0):",
+                    "    return (x * weight) + bias",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile_path = workspace / "profile.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "workload_name": "generic_linear_model",
+                    "bottlenecks": [
+                        {
+                            "rank": 1,
+                            "name": "proj",
+                            "kernel_type": "linear",
+                            "time_share": 1.0,
+                            "kernel_path": str((workspace / "toy_linear.py").resolve()),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        optimized_dir = workspace / "workspace" / "optimized"
+        optimized_dir.mkdir(parents=True, exist_ok=True)
+        (optimized_dir / "linear--proj.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "linear"',
+                    "",
+                    "def kernel_fn(x, weight, bias=0.0):",
+                    "    return (x * weight) + bias",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = _run_script(
+            "verify.py",
+            workspace,
+            "--profile-path",
+            str(profile_path.resolve()),
+            "--model",
+            str((workspace / "generic_model.py").resolve()),
+            "--workspace-root",
+            str((workspace / "workspace").resolve()),
+            "--iterations",
+            "3",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model_verify", result.stdout)
+        self.assertIn("model_correctness=PASS", result.stdout)
+        values = dict(
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if "=" in line
+        )
+        self.assertGreater(
+            float(values["model_baseline_total_ms"]),
+            float(values["model_optimized_total_ms"]),
+        )
+
+    def test_profile_generic_model_contract_auto_discovers_named_modules(self) -> None:
+        workspace = self._scratch_dir("profile-auto-discovered-model")
+        (workspace / "generic_model.py").write_text(
+            "\n".join(
+                [
+                    "class RmsNormLayer:",
+                    "    def __init__(self, weight=2.0, eps=0.5):",
+                    "        self.weight = weight",
+                    "        self.eps = eps",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return (x * self.weight) + self.eps",
+                    "",
+                    "class ToyModel:",
+                    "    def __init__(self):",
+                    "        self.norm = RmsNormLayer()",
+                    "",
+                    "    def named_modules(self):",
+                    "        return [('', self), ('norm', self.norm)]",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return self.norm(x) + 1.0",
+                    "",
+                    "def build_model(device='cpu', dtype='float32', class_name=None):",
+                    "    return ToyModel()",
+                    "",
+                    "def build_inputs(device='cpu', input_shape=None, dtype='float32'):",
+                    "    return 3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest_path = workspace / "workspace" / "profile.json"
+
+        result = _run_script(
+            "profile.py",
+            workspace,
+            "--model",
+            str((workspace / "generic_model.py").resolve()),
+            "--manifest-out",
+            str(manifest_path.resolve()),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model", result.stdout)
+        self.assertIn("top_target_name=norm", result.stdout)
+        self.assertIn("top_kernel_type=rms_norm", result.stdout)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["bottlenecks"][0]["name"], "norm")
+        self.assertEqual(manifest["bottlenecks"][0]["kernel_type"], "rms_norm")
+
+    def test_verify_generic_model_contract_auto_discovers_linear_targets(self) -> None:
+        workspace = self._scratch_dir("verify-auto-discovered-linear-model")
+        (workspace / "generic_model.py").write_text(
+            "\n".join(
+                [
+                    "import time",
+                    "",
+                    "class Linear:",
+                    "    def __init__(self, weight=2.0, bias=0.5):",
+                    "        self.weight = weight",
+                    "        self.bias = bias",
+                    "",
+                    "    def __call__(self, x):",
+                    "        time.sleep(0.002)",
+                    "        return (x * self.weight) + self.bias",
+                    "",
+                    "class ToyModel:",
+                    "    def __init__(self):",
+                    "        self.proj = Linear()",
+                    "",
+                    "    def named_modules(self):",
+                    "        return [('', self), ('proj', self.proj)]",
+                    "",
+                    "    def __call__(self, x):",
+                    "        return self.proj(x) + 1.0",
+                    "",
+                    "def build_model(device='cpu', dtype='float32', class_name=None):",
+                    "    return ToyModel()",
+                    "",
+                    "def build_inputs(device='cpu', input_shape=None, dtype='float32'):",
+                    "    return 3.0",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        profile_path = workspace / "profile.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "workload_name": "generic_linear_model",
+                    "bottlenecks": [
+                        {
+                            "rank": 1,
+                            "name": "proj",
+                            "kernel_type": "linear",
+                            "time_share": 1.0,
+                            "kernel_path": str((REPO_ROOT / "kernels" / "linear.py").resolve()),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        optimized_dir = workspace / "workspace" / "optimized"
+        optimized_dir.mkdir(parents=True, exist_ok=True)
+        (optimized_dir / "linear--proj.py").write_text(
+            "\n".join(
+                [
+                    'KERNEL_TYPE = "linear"',
+                    "",
+                    "def kernel_fn(x, weight, bias=0.0):",
+                    "    return (x * weight) + bias",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = _run_script(
+            "verify.py",
+            workspace,
+            "--profile-path",
+            str(profile_path.resolve()),
+            "--model",
+            str((workspace / "generic_model.py").resolve()),
+            "--workspace-root",
+            str((workspace / "workspace").resolve()),
+            "--iterations",
+            "3",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("mode=model_verify", result.stdout)
+        self.assertIn("model_correctness=PASS", result.stdout)
+        values = dict(
+            line.split("=", 1)
+            for line in result.stdout.splitlines()
+            if "=" in line
+        )
+        self.assertGreater(
+            float(values["model_baseline_total_ms"]),
+            float(values["model_optimized_total_ms"]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
