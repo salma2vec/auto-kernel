@@ -3,7 +3,7 @@ from pathlib import Path
 
 from auto_kernel.artifacts import resolve_optimized_kernel
 from auto_kernel.measurement import measure_workload
-from auto_kernel.model_adapters import verify_model_adapter
+from auto_kernel.model_adapters import parse_input_shape, verify_model_adapter
 from auto_kernel.orchestration import aggregate_speedup_by_kernel_type, project_end_to_end_speedup
 from auto_kernel.results import best_speedups_by_kernel_type
 from auto_kernel.workspace import read_json
@@ -19,6 +19,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measure-workload", action="store_true")
     parser.add_argument("--model", default=None)
     parser.add_argument("--class-name", default=None)
+    parser.add_argument("--input-shape", default=None)
+    parser.add_argument("--dtype", default="float32")
     return parser.parse_args()
 
 
@@ -52,6 +54,8 @@ def main() -> int:
             device=args.device,
             iterations=args.iterations,
             class_name=args.class_name,
+            input_shape=parse_input_shape(args.input_shape),
+            dtype=args.dtype,
         )
         correctness = "PASS" if model_result.get("correct") else "FAIL"
         baseline_total_ms = float(model_result.get("baseline_total_ms", 0.0))
