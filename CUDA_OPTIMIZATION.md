@@ -1,12 +1,27 @@
 # CUDA Optimization Notes
 
-This file is the working optimization notebook for the repository.
+Record reusable optimization patterns here.
 
-Initial reminders:
+## General Rules
 
 - Verify correctness before trusting performance numbers.
-- Prefer one change per experiment.
-- Track arithmetic intensity before guessing at a bottleneck.
-- Improve memory access patterns before chasing micro-optimizations.
-- Record rejected ideas so they are not retried blindly.
+- Use one hypothesis per experiment.
+- Let benchmark output identify the macro bottleneck direction.
+- Let deep profiling identify the specific cause.
 
+## Memory-Bound Patterns
+
+- Improve coalescing before changing arithmetic structure.
+- Prefer vectorized loads when they reduce memory transactions cleanly.
+- Improve locality before increasing pipeline depth.
+
+## Compute-Bound Patterns
+
+- Reduce redundant math before retuning launch geometry.
+- Revisit tile shape when utilization is low but occupancy is healthy.
+
+## Anti-Patterns
+
+- Combining multiple unrelated changes into one experiment
+- Keeping a faster kernel that fails correctness checks
+- Retrying the same failed idea without new profiler evidence

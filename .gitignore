@@ -6,4 +6,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 .DS_Store
-
+workspace/
+.tmp/
+.pycache_local/
+.tmp_test_workspaces/
