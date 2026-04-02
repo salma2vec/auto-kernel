@@ -58,6 +58,8 @@ def main() -> int:
         "rank": int(record.get("rank", 0) or 0),
         "time_share": float(record.get("time_share", 0.0) or 0.0),
     }
+    for key, value in record.items():
+        active_manifest.setdefault(str(key), value)
     write_json(active_kernel_manifest_path(workspace_root), active_manifest)
 
     print(f"selected_kernel_type={active_manifest['kernel_type']}")
