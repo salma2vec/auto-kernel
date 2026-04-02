@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 import torch
 
+from auto_kernel.artifacts import persist_optimized_kernel
 from auto_kernel.workspace import active_kernel_manifest_path, read_json
 from prepare import resolve_device
 from reference import REFERENCE_FUNCTIONS
@@ -528,6 +529,17 @@ def main() -> int:
     append_memory_note(Path("MEMORY.md"), f"Experiment {experiment_id}", memory_lines)
     append_memory_note(Path("memory") / f"{contract.kernel_type}.md", f"Experiment {experiment_id}", memory_lines)
 
+    artifact_path = ""
+    if args.kept == "yes" and correctness_label == "PASS" and active_context:
+        updated_context = persist_optimized_kernel(
+            workspace_root=Path("workspace"),
+            kernel_file=Path("kernel.py"),
+            active_manifest=active_context,
+            speedup_vs_reference=metrics.speedup_vs_pytorch,
+            experiment_id=experiment_id,
+        )
+        artifact_path = str(updated_context.get("optimized_kernel_path", ""))
+
     print(f"kernel={contract.kernel_type}")
     print(f"device={device}")
     print(f"experiment_id={experiment_id}")
@@ -545,6 +557,8 @@ def main() -> int:
     print(f"peak_vram_mb={metrics.peak_vram_mb:.2f}")
     print(f"peak_source={metrics.peak_source}")
     print(f"kept={args.kept}")
+    if artifact_path:
+        print(f"optimized_kernel_path={artifact_path}")
     return 0 if correctness_label == "PASS" else 1
 
 
