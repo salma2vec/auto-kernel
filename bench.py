@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 
 import torch
 
+from auto_kernel.workspace import active_kernel_manifest_path, read_json
 from prepare import resolve_device
 from reference import REFERENCE_FUNCTIONS
 
@@ -20,12 +21,15 @@ Shape = Tuple[int, int, int]
 
 RESULT_COLUMNS = [
     "experiment_id",
+    "kernel_type",
+    "target_name",
     "hypothesis",
     "correctness",
     "time_ms",
     "throughput",
     "peak_vram_mb",
     "kept",
+    "speedup_vs_reference",
 ]
 
 KNOWN_GPU_PEAKS = {
@@ -448,6 +452,13 @@ def default_experiment_id() -> str:
     return datetime.now(timezone.utc).strftime("exp-%Y%m%d-%H%M%S")
 
 
+def load_active_context() -> Dict[str, object]:
+    manifest_path = active_kernel_manifest_path(Path("workspace"))
+    if not manifest_path.exists():
+        return {}
+    return read_json(manifest_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark the active kernel.")
     parser.add_argument("--device", default="auto")
@@ -473,6 +484,7 @@ def main() -> int:
     )
     warmup = args.warmup if args.warmup is not None else config.default_warmup
     experiment_id = args.experiment_id or default_experiment_id()
+    active_context = load_active_context()
 
     correctness = run_correctness_checks(contract, config, device, quick=args.quick)
     metrics = benchmark_kernel(contract, config, device, iterations=iterations, warmup=warmup)
@@ -483,12 +495,15 @@ def main() -> int:
         Path(args.results_path),
         {
             "experiment_id": experiment_id,
+            "kernel_type": contract.kernel_type,
+            "target_name": active_context.get("name", ""),
             "hypothesis": args.hypothesis,
             "correctness": f"{correctness_label}|{summarize_correctness(correctness)}",
             "time_ms": f"{metrics.time_ms:.4f}",
             "throughput": throughput_summary,
             "peak_vram_mb": f"{metrics.peak_vram_mb:.2f}",
             "kept": args.kept,
+            "speedup_vs_reference": f"{metrics.speedup_vs_pytorch:.4f}",
         },
     )
 

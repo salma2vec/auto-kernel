@@ -1,4 +1,5 @@
 import argparse
+import json
 import importlib.util
 import sysconfig
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ Profile = _STDLIB_PROFILE.Profile
 @dataclass
 class ProfileClassification:
     arithmetic_intensity: float
+    time_ms: float
     throughput_tflops: float
     bandwidth_gb_s: float
     pct_peak_compute: Optional[float]
@@ -84,6 +86,7 @@ def profile_kernel(contract, device: str, iterations: int, warmup: int) -> Profi
     bottleneck = classify_bottleneck(arithmetic_intensity, peak_compute_tflops, peak_bandwidth_gb_s)
     return ProfileClassification(
         arithmetic_intensity=arithmetic_intensity,
+        time_ms=elapsed_seconds * 1000.0,
         throughput_tflops=throughput_tflops,
         bandwidth_gb_s=bandwidth_gb_s,
         pct_peak_compute=pct_peak_compute,
@@ -99,6 +102,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--manifest-out", default=None)
+    parser.add_argument("--name", default=None)
     return parser.parse_args()
 
 
@@ -121,6 +126,26 @@ def main() -> int:
     print(f"ridge_point={_format_optional(report.ridge_point)}")
     print(f"bottleneck={report.bottleneck}")
     print(f"peak_source={report.peak_source}")
+    if args.manifest_out:
+        manifest = {
+            "workload_name": args.name or contract.kernel_type,
+            "device": device,
+            "total_time_ms": report.time_ms,
+            "bottlenecks": [
+                {
+                    "rank": 1,
+                    "name": args.name or contract.kernel_type,
+                    "kernel_type": contract.kernel_type,
+                    "baseline_time_ms": report.time_ms,
+                    "time_share": 1.0,
+                    "kernel_path": "kernel.py",
+                }
+            ],
+        }
+        manifest_path = Path(args.manifest_out)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"manifest_path={manifest_path}")
     return 0
 
 
