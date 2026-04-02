@@ -133,6 +133,48 @@ class PipelineScriptTests(unittest.TestCase):
         self.assertIn("source_kind=optimized", result.stdout)
         self.assertIn("# optimized variant", (workspace / "kernel.py").read_text(encoding="utf-8"))
 
+    def test_extract_copies_linear_kernel_inventory_entry(self) -> None:
+        workspace = self._scratch_dir("extract-linear-script")
+        shutil.copytree(
+            REPO_ROOT / "kernels",
+            workspace / "kernels",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        (workspace / "kernel.py").write_text("# placeholder\n", encoding="utf-8")
+        profile_path = workspace / "profile.json"
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "workload_name": "toy-linear",
+                    "bottlenecks": [
+                        {
+                            "rank": 1,
+                            "name": "proj",
+                            "kernel_type": "linear",
+                            "time_share": 1.0,
+                            "kernel_path": "kernels/linear.py",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run_script(
+            "extract.py",
+            workspace,
+            "--profile-path",
+            "profile.json",
+            "--workspace-root",
+            "workspace",
+            "--kernel-file",
+            "kernel.py",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("selected_kernel_type=linear", result.stdout)
+        self.assertIn('KERNEL_TYPE = "linear"', (workspace / "kernel.py").read_text(encoding="utf-8"))
+
     def test_orchestrate_and_verify_report_projected_speedup(self) -> None:
         workspace = self._scratch_dir("orchestrate-script")
         profile_path = workspace / "profile.json"

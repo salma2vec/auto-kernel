@@ -124,6 +124,74 @@ def _rms_norm_edge_cases(contract: KernelContract, device: str) -> Iterable[Tupl
     ]
 
 
+def _linear_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+        out_features=hidden_size,
+    )
+
+
+def _linear_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8, out_features=8)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    ones = _clone_tree(base)
+    ones["x"] = torch.ones_like(ones["x"])
+    return [
+        ("zeros", zeros),
+        ("ones", ones),
+    ]
+
+
+def _softmax_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+        dim=-1,
+    )
+
+
+def _softmax_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8, dim=-1)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    large = _clone_tree(base)
+    large["x"] = torch.full_like(large["x"], 1e3)
+    return [
+        ("zeros", zeros),
+        ("large_values", large),
+    ]
+
+
+def _layer_norm_input_builder(contract: KernelContract, device: str, shape: Shape) -> Dict[str, Any]:
+    batch_size, seq_len, hidden_size = shape
+    return contract.get_inputs(
+        device=device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_size=hidden_size,
+    )
+
+
+def _layer_norm_edge_cases(contract: KernelContract, device: str) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    base = contract.get_inputs(device=device, batch_size=2, seq_len=4, hidden_size=8)
+    zeros = _clone_tree(base)
+    zeros["x"] = torch.zeros_like(zeros["x"])
+    ones = _clone_tree(base)
+    ones["x"] = torch.ones_like(ones["x"])
+    return [
+        ("zeros", zeros),
+        ("ones", ones),
+    ]
+
+
 KERNEL_CONFIGS: Dict[str, BenchmarkConfig] = {
     "rms_norm": BenchmarkConfig(
         quick_shapes=((2, 4, 8), (4, 8, 16)),
@@ -136,7 +204,43 @@ KERNEL_CONFIGS: Dict[str, BenchmarkConfig] = {
         default_warmup=5,
         input_builder=_rms_norm_input_builder,
         edge_case_builder=_rms_norm_edge_cases,
-    )
+    ),
+    "linear": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_linear_input_builder,
+        edge_case_builder=_linear_edge_cases,
+    ),
+    "softmax": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_softmax_input_builder,
+        edge_case_builder=_softmax_edge_cases,
+    ),
+    "layer_norm": BenchmarkConfig(
+        quick_shapes=((2, 4, 8), (4, 8, 16)),
+        full_shapes=((2, 4, 8), (8, 32, 64), (16, 64, 128)),
+        timing_shape=(16, 64, 128),
+        atol=1e-5,
+        rtol=1e-4,
+        quick_iterations=5,
+        full_iterations=25,
+        default_warmup=5,
+        input_builder=_layer_norm_input_builder,
+        edge_case_builder=_layer_norm_edge_cases,
+    ),
 }
 
 
