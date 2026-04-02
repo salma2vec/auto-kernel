@@ -7,19 +7,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Optional
 
-import torch
-
-from bench import (
-    _clone_tree,
-    _format_optional,
-    _sync_if_needed,
-    call_metadata_fn,
-    classify_bottleneck,
-    get_benchmark_config,
-    infer_peak_targets,
-    load_kernel_module,
-    validate_kernel_module,
-)
+from auto_kernel.model_adapters import parse_input_shape, trace_model_adapter
 from prepare import collect_environment_report, resolve_device
 from auto_kernel.workloads import load_workload_module, workload_entries, workload_name
 
@@ -53,7 +41,22 @@ class ProfileClassification:
     peak_source: str
 
 
+def _format_optional(value: Optional[float]) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.4f}"
+
+
 def profile_kernel(contract, device: str, iterations: int, warmup: int) -> ProfileClassification:
+    from bench import (
+        _clone_tree,
+        _sync_if_needed,
+        call_metadata_fn,
+        classify_bottleneck,
+        get_benchmark_config,
+        infer_peak_targets,
+    )
+
     config = get_benchmark_config(contract.kernel_type)
     inputs = config.input_builder(contract, device, config.timing_shape)
 
@@ -117,6 +120,9 @@ def profile_workload_entry(
     kernel_path = Path(str(entry["kernel_path"]))
     if not kernel_path.is_absolute():
         kernel_path = (source_dir / kernel_path).resolve()
+
+    from bench import _clone_tree, _sync_if_needed, load_kernel_module, validate_kernel_module
+
     module = load_kernel_module(str(kernel_path))
     contract = validate_kernel_module(module)
 
@@ -187,6 +193,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--workload", default=None)
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--class-name", default=None)
+    parser.add_argument("--input-shape", default=None)
+    parser.add_argument("--dtype", default="float32")
     parser.add_argument("--manifest-out", default=None)
     parser.add_argument("--name", default=None)
     return parser.parse_args()
@@ -195,6 +205,34 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     device = resolve_device(args.device)
+    if args.model:
+        model_manifest = trace_model_adapter(
+            model_path=Path(args.model).resolve(),
+            device=device,
+            input_shape=parse_input_shape(args.input_shape),
+            dtype=args.dtype,
+            iterations=args.iterations,
+            warmup=args.warmup,
+            class_name=args.class_name,
+        )
+        print(f"workload_name={model_manifest['workload_name']}")
+        print(f"device={device}")
+        print("mode=model")
+        print(f"total_time_ms={model_manifest['total_time_ms']:.4f}")
+        print(f"bottleneck_count={len(model_manifest['bottlenecks'])}")
+        if model_manifest["bottlenecks"]:
+            print(f"top_kernel_type={model_manifest['bottlenecks'][0]['kernel_type']}")
+            print(f"top_target_name={model_manifest['bottlenecks'][0]['name']}")
+        if args.manifest_out:
+            manifest_path = Path(args.manifest_out)
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(model_manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            print(f"manifest_path={manifest_path}")
+        return 0
+
     if args.workload:
         workload_manifest = build_workload_manifest(
             workload_path=Path(args.workload).resolve(),
@@ -219,6 +257,8 @@ def main() -> int:
             )
             print(f"manifest_path={manifest_path}")
         return 0
+
+    from bench import load_kernel_module, validate_kernel_module
 
     module = load_kernel_module("kernel.py")
     contract = validate_kernel_module(module)

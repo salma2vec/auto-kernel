@@ -8,11 +8,13 @@ from auto_kernel.workspace import read_json
 
 class ArtifactTests(unittest.TestCase):
     def _scratch_dir(self, name: str) -> Path:
-        root = Path(__file__).resolve().parent.parent / ".tmp_test_workspaces" / name
+        base = Path(__file__).resolve().parent.parent / ".tmp" / "test_workspaces"
+        base.mkdir(parents=True, exist_ok=True)
+        root = base / name
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        self.addCleanup(lambda root=root: shutil.rmtree(root, ignore_errors=True))
         return root
 
     def test_optimized_kernel_path_is_stable_and_named_by_target(self) -> None:
