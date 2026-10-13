@@ -1,5 +1,6 @@
 import argparse
 import copy
+import csv
 import importlib.util
 import inspect
 import os
@@ -371,7 +372,7 @@ def compare_outputs(
         if actual_tensor.shape != expected_tensor.shape:
             return False, float("inf"), f"tensor {index} shape mismatch"
         if actual_tensor.dtype != expected_tensor.dtype:
-            expected_tensor = expected_tensor.to(actual_tensor.dtype)
+            return False, float("inf"), f"tensor {index} dtype mismatch"
         diff = float((actual_tensor - expected_tensor).abs().max().item())
         max_abs_diff = max(max_abs_diff, diff)
         if not torch.allclose(actual_tensor, expected_tensor, atol=atol, rtol=rtol):
@@ -387,7 +388,11 @@ def run_correctness_pass(
     rtol: float,
 ) -> Tuple[bool, float, str]:
     expected = reference_fn(**_clone_tree(inputs))
-    actual = contract.kernel_fn(**_clone_tree(inputs))
+    candidate_inputs = _clone_tree(inputs)
+    actual = contract.kernel_fn(**candidate_inputs)
+    for name, value in inputs.items():
+        if isinstance(value, torch.Tensor) and not torch.equal(value, candidate_inputs[name]):
+            return False, float("inf"), f"input {name} mutated"
     return compare_outputs(actual, expected, atol=atol, rtol=rtol)
 
 
@@ -457,17 +462,8 @@ def run_correctness_checks(
 
 
 def benchmark_callable(fn: Callable[[], Any], device: str, warmup: int, iterations: int) -> float:
-    for _ in range(warmup):
-        fn()
-        _sync_if_needed(device)
-
-    timings = []
-    for _ in range(iterations):
-        start = perf_counter()
-        fn()
-        _sync_if_needed(device)
-        timings.append(perf_counter() - start)
-    return sum(timings) / len(timings)
+    from auto_kernel.timing import benchmark_callable as measure
+    return measure(fn, device, warmup, iterations)
 
 
 def benchmark_kernel(
@@ -483,8 +479,8 @@ def benchmark_kernel(
     if device.startswith("cuda") and torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
-    kernel_seconds = benchmark_callable(lambda: contract.kernel_fn(**_clone_tree(inputs)), device, warmup, iterations)
-    reference_seconds = benchmark_callable(lambda: reference_fn(**_clone_tree(inputs)), device, warmup, iterations)
+    kernel_seconds = benchmark_callable(lambda: contract.kernel_fn(**inputs), device, warmup, iterations)
+    reference_seconds = benchmark_callable(lambda: reference_fn(**inputs), device, warmup, iterations)
 
     flops = call_metadata_fn(contract.get_flops, inputs)
     bytes_accessed = call_metadata_fn(contract.get_bytes, inputs)
@@ -536,13 +532,16 @@ def summarize_throughput(metrics: BenchmarkMetrics) -> str:
 
 def append_result_row(path: Path, row: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    header = "\t".join(RESULT_COLUMNS)
-    if not path.exists():
-        path.write_text(f"{header}\n", encoding="utf-8")
-
-    with path.open("a", encoding="utf-8") as handle:
-        line = "\t".join(str(row.get(column, "")) for column in RESULT_COLUMNS)
-        handle.write(f"{line}\n")
+    needs_header = not path.exists() or path.stat().st_size == 0
+    if not needs_header:
+        with path.open(encoding="utf-8", newline="") as existing:
+            if next(csv.reader(existing, delimiter="\t")) != RESULT_COLUMNS:
+                raise ValueError("Result column schema differs; choose a fresh --results-path")
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS, delimiter="\t")
+        if needs_header:
+            writer.writeheader()
+        writer.writerow({column: row.get(column, "") for column in RESULT_COLUMNS})
 
 
 def append_memory_note(path: Path, title: str, lines: Mapping[str, object]) -> None:
@@ -630,8 +629,8 @@ def main() -> int:
         "kept": args.kept,
         "mode": "quick" if args.quick else "full",
     }
-    append_memory_note(Path("MEMORY.md"), f"Experiment {experiment_id}", memory_lines)
-    append_memory_note(Path("memory") / f"{contract.kernel_type}.md", f"Experiment {experiment_id}", memory_lines)
+    append_memory_note(Path("workspace/experiments.md"), f"Experiment {experiment_id}", memory_lines)
+    append_memory_note(Path("workspace/notes") / f"{contract.kernel_type}.md", f"Experiment {experiment_id}", memory_lines)
 
     artifact_path = ""
     if args.kept == "yes" and correctness_label == "PASS" and active_context:

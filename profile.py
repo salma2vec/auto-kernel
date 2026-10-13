@@ -61,7 +61,7 @@ def profile_kernel(contract, device: str, iterations: int, warmup: int) -> Profi
     inputs = config.input_builder(contract, device, config.timing_shape)
 
     def run_once() -> None:
-        contract.kernel_fn(**_clone_tree(inputs))
+        contract.kernel_fn(**inputs)
         _sync_if_needed(device)
 
     for _ in range(warmup):
@@ -130,7 +130,7 @@ def profile_workload_entry(
     inputs = contract.get_inputs(device=device, **input_kwargs)
 
     def run_once() -> None:
-        contract.kernel_fn(**_clone_tree(inputs))
+        contract.kernel_fn(**inputs)
         _sync_if_needed(device)
 
     for _ in range(warmup):

@@ -44,12 +44,8 @@ def measure_kernel_module(path: str, input_kwargs: Mapping[str, Any], device: st
     module = load_module(path)
     inputs = call_get_inputs(module, device=device, input_kwargs=input_kwargs)
 
-    timings = []
-    for _ in range(max(iterations, 1)):
-        start = perf_counter()
-        module.kernel_fn(**clone_value(inputs))
-        timings.append(perf_counter() - start)
-    return sum(timings) / len(timings) * 1000.0
+    from auto_kernel.timing import benchmark_callable
+    return benchmark_callable(lambda: module.kernel_fn(**inputs), device, 3, iterations) * 1000.0
 
 
 def measure_workload(

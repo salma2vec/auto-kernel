@@ -1,1 +1,1 @@
-experiment_id	hypothesis	correctness	time_ms	throughput	peak_vram_mb	kept
+experiment_id	kernel_type	target_name	hypothesis	correctness	time_ms	throughput	peak_vram_mb	kept	speedup_vs_reference

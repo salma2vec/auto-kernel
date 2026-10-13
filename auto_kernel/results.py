@@ -1,4 +1,5 @@
 import csv
+import math
 from pathlib import Path
 from typing import Dict, List
 
@@ -18,13 +19,15 @@ def best_speedups_by_kernel_type(path: Path) -> Dict[str, float]:
             continue
         correctness = row.get("correctness", "")
         kept = row.get("kept", "")
-        if correctness and not correctness.startswith("PASS"):
+        if not correctness.startswith("PASS"):
             continue
-        if kept and kept not in {"yes", "pending"}:
+        if kept != "yes":
             continue
         try:
             speedup = float(row.get("speedup_vs_reference", "") or "1.0")
         except ValueError:
+            continue
+        if not math.isfinite(speedup) or speedup <= 0:
             continue
         kernel_type = row["kernel_type"]
         best[kernel_type] = max(best.get(kernel_type, 1.0), speedup)

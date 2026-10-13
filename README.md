@@ -1,292 +1,69 @@
 # auto-kernel
 
-Autonomous GPU kernel optimization, centered on a single editable file.
+A workload-first kernel optimization workbench with a bounded automatic search loop. Profile a workload, select a hot operation, generate a concrete candidate, check it against the reference, and retain it only when repeated timings support an improvement.
 
-`auto-kernel` is a workload-first loop for finding a hot kernel, pulling it into `kernel.py`, iterating on it, and measuring whether the change actually improves end-to-end runtime.
+The default search is offline and uses a small, explicit family of transformations. It is useful for studying the optimization/evaluation loop without an API key. It is not an unrestricted LLM kernel author or a claim of state-of-the-art GPU performance.
 
-It is built for the common optimization problem that high-signal systems repos solve well:
-
-- find the real bottleneck instead of guessing
-- optimize one thing at a time
-- keep the active change small and reviewable
-- preserve the best variant as an artifact
-- measure local speedups against workload-level impact
-
-## Why This Repo Exists
-
-Most kernel tuning workflows are either too manual or too magical.
-
-Manual workflows make it hard to keep experiments organized.
-
-Magical workflows hide the active change behind generated code and large orchestration layers.
-
-`auto-kernel` takes a simpler stance:
-
-- one active kernel lives in [`kernel.py`](kernel.py)
-- one ranked manifest tells you what matters next
-- one benchmark loop decides whether a change stays
-- one verification path reports projected or measured workload impact
-
-That makes the repo easy to audit, easy to diff, and easy to resume.
-
-## What It Does
-
-`auto-kernel` supports three optimization entry points:
-
-| Mode | Input | Output |
-|---|---|---|
-| Direct kernel | active [`kernel.py`](kernel.py) | correctness + timing + saved optimized variant |
-| Workload-driven | workload module under [`models/`](models) | ranked bottleneck manifest |
-| Model-driven | live PyTorch model adapter | bottleneck discovery + reintegration verification |
-
-The default loop is:
-
-1. Profile a workload, model, or active kernel.
-2. Extract the highest-value bottleneck into [`kernel.py`](kernel.py).
-3. Make one focused optimization change.
-4. Benchmark against the reference implementation.
-5. Keep or discard the result.
-6. Track projected or measured workload-level gains.
-
-## Highlights
-
-- Single active edit surface: optimize in [`kernel.py`](kernel.py), not across generated files.
-- Ranked bottleneck manifests: profile by workload share before optimizing.
-- Saved best variants: accepted kernels are persisted under `workspace/optimized/`.
-- Model reintegration path: verify optimized kernels back inside a live PyTorch model.
-- Generic model support: auto-discovers common leaf modules when `MODEL_TARGETS` is absent.
-- CPU fallback: [`bench.py`](bench.py) and [`profile.py`](profile.py) auto-select CUDA when available and fall back to CPU otherwise.
-
-## Quick Start
-
-### Option A: `uv` workflow
+## Quick start
 
 ```bash
-uv sync
-uv run prepare.py
-uv run bench.py --iterations 1 --warmup 0
-```
-
-### Option B: local virtualenv
-
-```bash
-python3 -m venv .venv
+git clone https://github.com/salma2vec/auto-kernel.git
+cd auto-kernel
+python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 python prepare.py
-python bench.py --iterations 1 --warmup 0
+python bench.py --iterations 10 --warmup 3
+python optimize.py --output workspace/search-001
+python -m unittest -q
 ```
 
-The repository ships with `rms_norm` as the default active kernel, so the loop works immediately after setup.
+The default active implementation is RMSNorm. CUDA is selected when available; CPU is a functional fallback. GPU timings and Nsight Compute analysis require suitable hardware and a local CUDA/Nsight installation.
 
-## The 5-Minute Tour
+## Automatic search
 
-### 1. Check the environment
+`optimize.py` generates candidates with explicit hypotheses (for example, replacing a separate matrix multiplication and bias addition with a native linear operation), validates them, and makes accept/reject decisions. For RMSNorm it tests multiplication-based squaring and native normalization where supported. LayerNorm and Softmax currently have a native no-change control. Unsupported operators fail visibly as rejected trials.
 
 ```bash
-uv run prepare.py
+python optimize.py --device cpu --seed 42 --repeats 5 --iterations 25 \
+  --minimum-speedup 1.05 --output workspace/search-002
 ```
 
-This reports Python, Torch, CUDA, Triton, and Nsight Compute availability.
+Each new output directory contains the original source, candidate sources, selected source, source hashes, environment information, raw repeat timings, correctness results, hypotheses and rejection reasons. The active kernel stays untouched during trials. The final selected source replaces it only after the search finishes; failed or slower candidates leave the incumbent intact. Existing output directories are rejected so experiments cannot silently overwrite one another.
 
-### 2. Benchmark the active kernel
+Checks use trusted baseline input generators, three random seeds, multiple shapes, numerical scales, edge cases, additional odd-sized shapes and input-mutation detection. Timing excludes input construction/cloning and synchronizes CUDA work. Candidate and reference order is shuffled per repeat. Promotion requires a material improvement against a freshly remeasured incumbent, nonoverlapping observed timing ranges, and improved speedup relative to the paired reference. This is a conservative heuristic, not a statistical confidence interval.
+
+An additional implementation can be evaluated with `--candidate path/to/candidate.py`. It must satisfy the same contract as [kernel.py](kernel.py). **Candidate Python modules execute with the current user's privileges.** This runner is for trusted local code; it is not a sandbox for arbitrary downloaded or model-generated programs.
+
+## Workload-driven workflow
 
 ```bash
-uv run bench.py
+python profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
+python extract.py --profile-path workspace/profile.json
+python optimize.py --output workspace/search-003
+python bench.py --hypothesis 'validated search result' --kept yes
+python orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
+python verify.py --profile-path workspace/profile.json --workspace-root workspace --measure-workload
 ```
 
-This compares the active implementation in [`kernel.py`](kernel.py) against the reference in [`reference.py`](reference.py), then records the result.
+Accepted snapshots from `bench.py --kept yes` are stored under `workspace/optimized/`. `extract.py --prefer-optimized` resumes them. Ordinary benchmark results remain pending until explicitly accepted. Projected Amdahl estimates use only accepted correct finite results; they are separate from measured workload verification. Kernel-type aggregation assumes a measured speedup transfers across that operation's workload shapes, so confirm with workload/model reintegration before reporting an end-to-end improvement.
 
-### 3. Profile a workload
+## Model adapters
 
 ```bash
-uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
+python profile.py --model models/rms_norm_model.py --input-shape 4,128,512 --manifest-out workspace/profile.json
+python extract.py --profile-path workspace/profile.json
+python verify.py --profile-path workspace/profile.json --model models/rms_norm_model.py --input-shape 4,128,512
 ```
 
-This produces a ranked bottleneck manifest that tells you where optimization time is most valuable.
+Explicit adapters export `trace_model` and `verify_model`. Generic adapters export `build_model`, `build_inputs`, and optionally `MODEL_TARGETS`. Without explicit targets, supported RMSNorm, LayerNorm, Linear and Softmax leaf modules can be discovered. The binding-driven replacement path supports attributes, parameters and constants. Arbitrary PyTorch model extraction still requires a suitable adapter; finding a module does not prove its replacement is valid for every model.
 
-### 4. Extract the top bottleneck
+## Profiling and extension
 
-```bash
-uv run extract.py --profile-path workspace/profile.json
-```
+`profile.py` reports analytical arithmetic intensity and estimated roofline classification. `ncu_profile.py` can use Nsight Compute for hardware counter analysis. These signals guide experiment selection; the built-in candidate family is currently selected by operation type. Analytical FLOP/byte counts and nominal device peaks are approximations, not measured utilization.
 
-That copies the selected baseline kernel into [`kernel.py`](kernel.py) so the next edit is focused and reviewable.
+Add a trusted module to `kernels/` with `KERNEL_TYPE`, `kernel_fn`, `get_inputs`, `get_flops` and `get_bytes`, and register its reference and benchmark configuration. A workload exports `get_workload()` or `WORKLOAD`; each record declares a name, operation type, kernel path, and either input arguments or a supplied baseline duration. See [models/custom.py](models/custom.py).
 
-### 5. Verify workload impact
+See [methodology and related work](docs/methodology.md) for the experiment protocol, current research context and limitations. Baselines live in `kernels/`; active work lives in `kernel.py`; generated experiment notes and artifacts live in the ignored `workspace/` directory.
 
-```bash
-uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
-uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
-```
-
-That gives you the next target plus the projected end-to-end speedup implied by your accepted results.
-
-## Common Workflows
-
-### Workload-driven optimization
-
-Use this when you already know the workload shape and want to optimize by bottleneck share.
-
-```bash
-uv run profile.py --workload models/rms_norm_stack.py --manifest-out workspace/profile.json
-uv run extract.py --profile-path workspace/profile.json
-uv run bench.py --hypothesis "baseline"
-uv run orchestrate.py --profile-path workspace/profile.json --results-path results.tsv
-uv run verify.py --profile-path workspace/profile.json --results-path results.tsv
-```
-
-If you keep an experiment with `--kept yes`, the active kernel snapshot is saved under `workspace/optimized/`.
-
-You can later resume the best known variant for a target:
-
-```bash
-uv run extract.py --profile-path workspace/profile.json --prefer-optimized
-```
-
-### Model-driven optimization
-
-Use this when you want the bottleneck ranking and reintegration check to come from a live PyTorch model.
-
-```bash
-uv run profile.py --model models/rms_norm_model.py --input-shape 4,128,512 --manifest-out workspace/profile.json
-uv run extract.py --profile-path workspace/profile.json
-uv run bench.py --hypothesis "baseline"
-uv run verify.py --profile-path workspace/profile.json --model models/rms_norm_model.py --input-shape 4,128,512
-```
-
-Model modules can use either:
-
-1. Explicit adapters
-2. Generic adapters
-
-### Explicit model adapters
-
-Export:
-
-- `trace_model(...)`
-- `verify_model(...)`
-
-Use this when the model needs custom tracing or reintegration logic.
-
-### Generic model adapters
-
-Export:
-
-- `build_model(...)`
-- `build_inputs(...)`
-- optional `MODEL_TARGETS`
-
-Each `MODEL_TARGETS` entry may include:
-
-- `name`
-- `module_name`
-- `kernel_type`
-- optional `kernel_path`
-- optional `input_param`
-- optional `input_arg`
-- optional `attribute_bindings`
-- optional `parameter_bindings`
-- optional `constant_bindings`
-- backward-compatible `weight_attr`, `bias_attr`, and `eps_attr`
-
-If `MODEL_TARGETS` is omitted, the generic path auto-discovers supported leaf modules from `named_modules()` for common PyTorch-style classes such as:
-
-- `RMSNorm`
-- `LayerNorm`
-- `Linear`
-- `Softmax`
-
-The generic reintegration path is binding-driven, so built-in replacements are not limited to `rms_norm`.
-
-## Repository Layout
-
-```text
-auto-kernel/
-├── program.md              # optimization protocol
-├── CUDA_OPTIMIZATION.md    # optimization notes and heuristics
-├── MEMORY.md               # global experiment log
-├── results.tsv             # experiment history
-├── prepare.py              # environment validation
-├── profile.py              # workload and model profiling
-├── extract.py              # activate a bottleneck in kernel.py
-├── bench.py                # correctness and timing harness
-├── orchestrate.py          # choose the next kernel to optimize
-├── verify.py               # report projected or measured workload impact
-├── ncu_profile.py          # Nsight Compute analysis
-├── kernel.py               # active kernel under optimization
-├── reference.py            # reference implementations
-├── kernels/                # baseline kernel inventory
-├── models/                 # workload and model examples
-├── auto_kernel/            # shared manifests and orchestration helpers
-├── memory/                 # per-kernel notes
-├── ncu_reports/            # profiler artifacts
-└── workspace/              # manifests, active selections, and optimized artifacts (gitignored)
-```
-
-## Adding Your Own Kernel
-
-Create a kernel module under [`kernels/`](kernels) that exports:
-
-- `KERNEL_TYPE`
-- `kernel_fn(**inputs)`
-- `get_inputs(...)`
-- `get_flops(inputs)`
-- `get_bytes(inputs)`
-
-Then add the matching reference implementation in [`reference.py`](reference.py).
-
-To start iterating:
-
-```bash
-cp kernels/your_kernel.py kernel.py
-uv run bench.py
-uv run profile.py
-uv run ncu_profile.py
-```
-
-## Adding Your Own Workload
-
-Create a module under [`models/`](models) that exports either `get_workload()` or `WORKLOAD`.
-
-Each entry should include:
-
-- `name`
-- `kernel_type`
-- `kernel_path`
-- either `baseline_time_ms` or `input_kwargs`
-
-See [models/custom.py](models/custom.py) for a starter template.
-
-## Current Scope
-
-This repo now supports generic reintegration for more than `rms_norm`, and the built-in auto-discovery path covers common module families such as `RMSNorm`, `LayerNorm`, `Linear`, and `Softmax`.
-
-What it does not claim yet is full profiler-driven extraction from completely untouched arbitrary PyTorch models.
-
-That last slice still benefits from model-specific adapter logic when the boundary between model module and kernel contract is ambiguous.
-
-## Requirements
-
-- Python 3.9+
-- PyTorch
-- [`uv`](https://github.com/astral-sh/uv) for the default workflow
-- CUDA-capable GPU and Nsight Compute for full GPU profiling
-
-## Testing
-
-Run the full suite with:
-
-```bash
-python -m unittest -v
-```
-
-If you are using the local venv created above:
-
-```bash
-./.venv/bin/python -m unittest -v
-```
-
-## License
-
-[MIT](LICENSE)
+[MIT license](LICENSE).
