@@ -24,6 +24,13 @@ The default active implementation is RMSNorm. CUDA is selected when available; C
 
 [Apple M1 validation](docs/mps-validation.md) records 12 actual MPS searches with CPU-reference checks and retained raw trials. MPS is an explicit alternative backend; these measurements do not establish CUDA performance.
 
+[Whole-workload confirmation](docs/workload-validation.md) replaces both layers
+of the synthetic RMSNorm model and evaluates new input shapes after selection.
+Native RMSNorm achieved 4.80–5.26× speedup over explicit operations across five
+runs, with 480 correctness checks and zero promotions in 30 same-code controls.
+It matched the always-native baseline exactly: integration succeeded, while the
+separate added-search-value gate failed. This is not a pretrained-model result.
+
 ## Automatic search
 
 `optimize.py` generates candidates with explicit hypotheses (for example, replacing a separate matrix multiplication and bias addition with a native linear operation), validates them, and makes accept/reject decisions. For RMSNorm it tests multiplication-based squaring and native normalization where supported. LayerNorm and Softmax currently have a native no-change control. Unsupported operators fail visibly as rejected trials.
