@@ -21,6 +21,7 @@ from bench import (
 )
 from prepare import resolve_device
 from reference import REFERENCE_FUNCTIONS
+from auto_kernel.workspace import write_bytes_atomic
 
 
 def candidates(kernel_type):
@@ -138,9 +139,7 @@ def optimize(kernel_file, output, device="cpu", seed=42, repeats=5, iterations=2
     report["selected"] = best
     (output / "selected.py").write_bytes(best_source)
     (output / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
-    temporary = kernel_file.with_suffix(".candidate.tmp")
-    temporary.write_bytes(best_source)
-    temporary.replace(kernel_file)
+    write_bytes_atomic(kernel_file, best_source, mode=kernel_file.stat().st_mode & 0o777)
     return report
 
 

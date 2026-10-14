@@ -1,10 +1,9 @@
 import re
 import math
-import shutil
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from auto_kernel.workspace import active_kernel_manifest_path, ensure_workspace, write_json
+from auto_kernel.workspace import active_kernel_manifest_path, ensure_workspace, write_bytes_atomic, write_json
 
 
 def sanitize_target_name(name: str) -> str:
@@ -48,7 +47,7 @@ def persist_optimized_kernel(
         str(active_manifest["kernel_type"]),
         str(active_manifest["name"]),
     )
-    shutil.copy2(kernel_file, destination)
+    write_bytes_atomic(destination, kernel_file.read_bytes(), mode=kernel_file.stat().st_mode & 0o777)
 
     updated = dict(active_manifest)
     updated["optimized_kernel_path"] = str(destination)

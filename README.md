@@ -6,6 +6,8 @@ The default search is offline and uses a small, explicit family of transformatio
 
 ## Quick start
 
+Python 3.10+ and PyTorch 2.13+ are required.
+
 ```bash
 git clone https://github.com/salma2vec/auto-kernel.git
 cd auto-kernel
@@ -59,6 +61,8 @@ python verify.py --profile-path workspace/profile.json --model models/rms_norm_m
 ```
 
 Explicit adapters export `trace_model` and `verify_model`. Generic adapters export `build_model`, `build_inputs`, and optionally `MODEL_TARGETS`. Without explicit targets, supported RMSNorm, LayerNorm, Linear and Softmax leaf modules can be discovered. The binding-driven replacement path supports attributes, parameters and constants. Arbitrary PyTorch model extraction still requires a suitable adapter; finding a module does not prove its replacement is valid for every model.
+
+Model verification exits unsuccessfully when correctness fails or its measurements are invalid. Generic tensor comparison requires matching shapes and dtypes and finite outputs. Custom adapters remain trusted Python and must implement their own correct checks. `--measure-workload` times individual kernels; it does not independently validate their outputs or measure a complete model. Profile manifests can reference executable local kernel paths, so treat them and the workspace as trusted inputs too.
 
 ## Profiling and extension
 

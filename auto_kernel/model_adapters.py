@@ -432,6 +432,13 @@ def _measure_model(module: Any, model: Any, inputs: Any, device: str, iterations
 def _compare_values(actual: Any, expected: Any, atol: float, rtol: float) -> Tuple[bool, float]:
     torch = _maybe_import_torch()
     if torch is not None and isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
+        # allclose broadcasts compatible shapes, which is not model equivalence.
+        if actual.shape != expected.shape or actual.dtype != expected.dtype:
+            return False, float("inf")
+        if not bool(torch.isfinite(actual).all()) or not bool(torch.isfinite(expected).all()):
+            return False, float("inf")
+        if actual.numel() == 0:
+            return True, 0.0
         max_abs_diff = float(torch.max(torch.abs(actual - expected)).item())
         return bool(torch.allclose(actual, expected, atol=atol, rtol=rtol)), max_abs_diff
 

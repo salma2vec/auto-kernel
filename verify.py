@@ -1,4 +1,5 @@
 import argparse
+import math
 from pathlib import Path
 
 from auto_kernel.artifacts import resolve_optimized_kernel
@@ -57,17 +58,24 @@ def main() -> int:
             input_shape=parse_input_shape(args.input_shape),
             dtype=args.dtype,
         )
-        correctness = "PASS" if model_result.get("correct") else "FAIL"
         baseline_total_ms = float(model_result.get("baseline_total_ms", 0.0))
         optimized_total_ms = float(model_result.get("optimized_total_ms", baseline_total_ms))
+        max_abs_diff = float(model_result.get("max_abs_diff", float("inf")))
+        passed = (model_result.get("correct") is True
+                  and math.isfinite(max_abs_diff) and max_abs_diff >= 0
+                  and math.isfinite(baseline_total_ms) and baseline_total_ms > 0
+                  and math.isfinite(optimized_total_ms) and optimized_total_ms > 0)
+        correctness = "PASS" if passed else "FAIL"
         speedup = baseline_total_ms / optimized_total_ms if optimized_total_ms > 0 else 1.0
         print("mode=model_verify")
         print(f"model_correctness={correctness}")
-        print(f"model_max_abs_diff={float(model_result.get('max_abs_diff', 0.0)):.6f}")
+        print(f"model_max_abs_diff={max_abs_diff:.6f}")
         print(f"model_baseline_total_ms={baseline_total_ms:.4f}")
         print(f"model_optimized_total_ms={optimized_total_ms:.4f}")
         print(f"model_end_to_end_speedup={speedup:.4f}")
         print(f"model_optimized_kernel_count={len(optimized_kernels)}")
+        if not passed:
+            return 1
     if args.measure_workload:
         measured = measure_workload(
             profile=profile,

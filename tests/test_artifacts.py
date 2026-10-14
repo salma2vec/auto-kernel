@@ -57,6 +57,22 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(updated["last_experiment_id"], "exp-123")
         self.assertEqual(read_json(manifest_path)["optimized_kernel_path"], str(optimized_path))
 
+    def test_persistence_replaces_symlinks_without_clobbering_their_targets(self) -> None:
+        root = self._scratch_dir("artifact-symlinks")
+        workspace = root / "workspace"
+        destination = optimized_kernel_path(workspace, "rms_norm", "target")
+        kernel_file = root / "kernel.py"
+        kernel_file.write_text("KERNEL_TYPE = 'rms_norm'\n")
+        for output in (destination, workspace / "active_kernel.json"):
+            unrelated = root / (output.name + ".unrelated")
+            unrelated.write_text("keep this data")
+            output.symlink_to(unrelated)
+        persist_optimized_kernel(workspace, kernel_file, {"name": "target", "kernel_type": "rms_norm"}, 2, "test")
+        for output in (destination, workspace / "active_kernel.json"):
+            self.assertFalse(output.is_symlink())
+            self.assertEqual((root / (output.name + ".unrelated")).read_text(), "keep this data")
+        self.assertEqual(destination.read_bytes(), kernel_file.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

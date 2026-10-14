@@ -43,6 +43,23 @@ class SearchTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 optimized_kernel_path(Path(tmp), '../outside', 'name')
 
+    def test_promotion_does_not_follow_predictable_temp_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / 'kernel.py'
+            active.write_text('from kernels.rms_norm import *\n')
+            unrelated = root / 'unrelated.txt'
+            unrelated.write_text('preserve me')
+            active.with_suffix('.candidate.tmp').symlink_to(unrelated)
+            slow = {'candidate_ms': [2, 2.1, 2.2], 'candidate_median_ms': 2.1, 'speedup': 1.0}
+            fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1, 'speedup': 2.0}
+            with patch.object(optimize, 'evaluate', side_effect=[slow, fast, slow, slow, fast]):
+                report = optimize.optimize(active, root / 'run')
+            self.assertTrue(report['changed'])
+            self.assertEqual(unrelated.read_text(), 'preserve me')
+            self.assertFalse(active.is_symlink())
+            self.assertEqual(active.read_bytes(), (root / 'run/selected.py').read_bytes())
+
     def test_pending_and_nonfinite_results_not_projected(self):
         with tempfile.TemporaryDirectory() as tmp:
             results = Path(tmp) / 'results.tsv'

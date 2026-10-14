@@ -3,13 +3,13 @@ name = "auto-kernel"
 version = "0.1.0"
 description = "Autonomous GPU kernel optimization workflow"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-  "torch>=2.0",
+  "torch>=2.13.0",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
