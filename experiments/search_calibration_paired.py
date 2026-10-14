@@ -16,14 +16,13 @@ import torch
 from auto_kernel.timing import benchmark_callable
 from auto_kernel.workspace import write_bytes_atomic
 from experiments.search_calibration import (
-    acceptance_gate,
     check_control_correctness,
     explicit_rms,
     make_inputs,
     native_rms,
     slowed_native_rms,
 )
-from optimize import exact_paired_sign_pvalue, select_candidate
+from optimize import MAX_PAIRED_SIGN_PVALUE, exact_paired_sign_pvalue, select_candidate
 from prepare import collect_environment_report, resolve_device
 
 
@@ -36,7 +35,7 @@ PROTOCOL = {
     "iterations": 25,
     "warmup": 3,
     "minimum_paired_speedup": 1.05,
-    "maximum_one_sided_sign_pvalue": 0.05,
+    "maximum_one_sided_sign_pvalue": MAX_PAIRED_SIGN_PVALUE,
     "slowdown_clones": 8,
     "maximum_false_promotions": 0,
     "minimum_positive_detections": 19,
@@ -93,6 +92,113 @@ def run_trial(kind, shape, seed, device):
     accepted = select_candidate(incumbent, candidate, PROTOCOL["minimum_paired_speedup"])
     return {"kind": kind, "seed": seed, "shape": list(shape),
             "incumbent": incumbent, "candidate": candidate, "accepted": accepted}
+
+
+def _matches(left, right):
+    return (type(left) in (int, float) and type(right) in (int, float)
+            and math.isfinite(left) and math.isfinite(right)
+            and math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-15))
+
+
+def acceptance_gate(trials):
+    expected = {
+        ("null", seed, tuple(PROTOCOL["shapes"][index % len(PROTOCOL["shapes"])]))
+        for index, seed in enumerate(PROTOCOL["null_seeds"])
+    }
+    expected |= {
+        ("positive", seed, tuple(PROTOCOL["shapes"][index % len(PROTOCOL["shapes"])]))
+        for index, seed in enumerate(PROTOCOL["positive_seeds"])
+    }
+    observed = {(row.get("kind"), row.get("seed"), tuple(row.get("shape", [])))
+                for row in trials}
+    if len(trials) != len(expected) or observed != expected:
+        raise ValueError("Acceptance requires every fixed v2 trial exactly once")
+
+    counts = {str(shape): {"null_trials": 0, "false_promotions": 0,
+                           "positive_trials": 0, "positive_detections": 0}
+              for shape in PROTOCOL["shapes"]}
+    for row in trials:
+        candidate = row.get("candidate", {})
+        incumbent = row.get("incumbent", {})
+        for record in (candidate, incumbent):
+            for key in ("candidate_ms", "reference_ms"):
+                values = record.get(key)
+                if (not isinstance(values, list) or len(values) != PROTOCOL["repeats"]
+                        or any(type(value) not in (int, float)
+                               or not math.isfinite(value) or value <= 0 for value in values)):
+                    raise ValueError("Acceptance requires complete finite positive raw timings")
+            orders = record.get("orders")
+            if (not isinstance(orders, list) or len(orders) != PROTOCOL["repeats"]
+                    or any(not isinstance(order, list)
+                           or sorted(order) != ["candidate", "incumbent", "reference"]
+                           for order in orders)):
+                raise ValueError("Acceptance requires complete randomized block orders")
+        if (candidate["reference_ms"] != incumbent["reference_ms"]
+                or candidate["orders"] != incumbent["orders"]):
+            raise ValueError("Candidate and incumbent must share reference blocks and orders")
+
+        candidate_median = statistics.median(candidate["candidate_ms"])
+        incumbent_median = statistics.median(incumbent["candidate_ms"])
+        reference_median = statistics.median(candidate["reference_ms"])
+        summaries = (
+            (candidate.get("candidate_median_ms"), candidate_median),
+            (incumbent.get("candidate_median_ms"), incumbent_median),
+            (candidate.get("reference_median_ms"), reference_median),
+            (incumbent.get("reference_median_ms"), reference_median),
+            (candidate.get("speedup"), reference_median / candidate_median),
+            (incumbent.get("speedup"), reference_median / incumbent_median),
+        )
+        if any(not _matches(stored, recomputed) for stored, recomputed in summaries):
+            raise ValueError("Stored timing summaries do not match raw paired timings")
+
+        paired = [incumbent_ms / candidate_ms for incumbent_ms, candidate_ms
+                  in zip(incumbent["candidate_ms"], candidate["candidate_ms"])]
+        stored_paired = candidate.get("paired_speedups")
+        if (not isinstance(stored_paired, list) or len(stored_paired) != len(paired)
+                or any(not _matches(stored, recomputed)
+                       for stored, recomputed in zip(stored_paired, paired))
+                or not _matches(candidate.get("paired_median_speedup"), statistics.median(paired))
+                or not _matches(candidate.get("paired_sign_pvalue"),
+                                exact_paired_sign_pvalue(paired))):
+            raise ValueError("Stored paired evidence does not match raw timings")
+
+        recomputed_candidate = {**candidate, "paired_speedups": paired}
+        accepted = select_candidate(
+            incumbent, recomputed_candidate, PROTOCOL["minimum_paired_speedup"]
+        )
+        if type(row.get("accepted")) is not bool or row["accepted"] != accepted:
+            raise ValueError("Stored decision does not match the frozen paired rule")
+        shape_counts = counts[str(row["shape"])]
+        shape_counts[f"{row['kind']}_trials"] += 1
+        decision_key = "false_promotions" if row["kind"] == "null" else "positive_detections"
+        shape_counts[decision_key] += accepted
+
+    null_trials = sum(row["null_trials"] for row in counts.values())
+    positive_trials = sum(row["positive_trials"] for row in counts.values())
+    false_promotions = sum(row["false_promotions"] for row in counts.values())
+    positive_detections = sum(row["positive_detections"] for row in counts.values())
+    per_shape_positive_gate = all(
+        row["positive_detections"] >= PROTOCOL["minimum_positive_detections_per_shape"]
+        for row in counts.values()
+    )
+    no_false_promotions = false_promotions <= PROTOCOL["maximum_false_promotions"]
+    positive_sensitivity = (
+        positive_detections >= PROTOCOL["minimum_positive_detections"]
+        and per_shape_positive_gate
+    )
+    return {
+        "null_trials": null_trials,
+        "false_promotions": false_promotions,
+        "observed_false_promotion_rate": false_promotions / null_trials,
+        "positive_trials": positive_trials,
+        "positive_detections": positive_detections,
+        "observed_positive_detection_rate": positive_detections / positive_trials,
+        "by_shape": counts,
+        "no_false_promotions_gate": no_false_promotions,
+        "positive_sensitivity_gate": positive_sensitivity,
+        "passed": no_false_promotions and positive_sensitivity,
+        "interpretation": "Machine-local paired calibration, not a universal error rate",
+    }
 
 
 def run(output, device="cpu"):

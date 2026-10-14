@@ -24,6 +24,9 @@ from reference import REFERENCE_FUNCTIONS
 from auto_kernel.workspace import write_bytes_atomic
 
 
+MAX_PAIRED_SIGN_PVALUE = 0.05
+
+
 def candidates(kernel_type):
     """Small transparent search space; hypotheses are falsifiable, not promises."""
     prefix = f"from kernels.{kernel_type} import *\nimport torch\n"
@@ -152,11 +155,11 @@ def select_candidate(incumbent, candidate, minimum_speedup):
     if "paired_speedups" in candidate:
         paired = candidate["paired_speedups"]
         if (not isinstance(paired, list) or len(paired) < 3
-                or any(not isinstance(value, (int, float))
+                or any(type(value) not in (int, float)
                        or not math.isfinite(value) or value <= 0 for value in paired)):
             return False
         return (statistics.median(paired) >= minimum_speedup
-                and exact_paired_sign_pvalue(paired) <= 0.05)
+                and exact_paired_sign_pvalue(paired) <= MAX_PAIRED_SIGN_PVALUE)
     # Compatibility for old reports and third-party callers without paired data.
     return (candidate["candidate_median_ms"] * minimum_speedup < incumbent["candidate_median_ms"]
             and max(candidate["candidate_ms"]) < min(incumbent["candidate_ms"])
