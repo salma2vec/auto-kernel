@@ -20,6 +20,10 @@ The harness currently evaluates forward operations in FP32. It is not a backward
 
 Synchronized wall-clock measurements include dispatch costs. Timing ranges and paired-reference speedups reduce common noise but are not a hypothesis test and cannot eliminate thermal or scheduler drift. Benchmark on idle dedicated hardware, fix thread counts/power settings, repeat full runs, and compare appropriate vendor/compiler baselines. Peak-memory accounting and model-level memory validation remain limited. Candidate modules are trusted executable code; process and OS isolation are required for adversarial programs.
 
+The promotion rule has a separate prospective [null and sensitivity calibration
+protocol](search-calibration-protocol.md). It exercises the deployed heuristic
+without treating a same-code comparison as an optimization result.
+
 ## Primary research context
 
 - [KernelBench (Ouyang et al., 2025)](https://arxiv.org/abs/2502.10517) evaluates kernel correctness together with speedup. This workbench follows that separation but does not reproduce KernelBench's problem suite or results.
