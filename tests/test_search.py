@@ -16,8 +16,11 @@ class SearchTests(unittest.TestCase):
             active = root / 'kernel.py'
             source = 'from kernels.rms_norm import *\n'
             active.write_text(source)
-            result = {'candidate_ms': [2, 2, 2], 'candidate_median_ms': 2}
-            with patch.object(optimize, 'evaluate', side_effect=[result, result, result, RuntimeError('bad')]):
+            result = {'candidate_ms': [2, 2, 2], 'candidate_median_ms': 2, 'speedup': 1}
+            rejected = {**result, 'paired_speedups': [1, 1, 1, 1, 1]}
+            with (patch.object(optimize, 'evaluate', return_value=result),
+                  patch.object(optimize, 'evaluate_pair',
+                               side_effect=[(result, rejected), RuntimeError('bad')])):
                 report = optimize.optimize(active, root / 'run')
             self.assertFalse(report['changed'])
             self.assertEqual(active.read_text(), source)
@@ -31,8 +34,12 @@ class SearchTests(unittest.TestCase):
             active = root / 'kernel.py'
             active.write_text('from kernels.rms_norm import *\n')
             slow = {'candidate_ms': [2, 2.1, 2.2], 'candidate_median_ms': 2.1, 'speedup': 1.0}
-            fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1, 'speedup': 2.0}
-            with patch.object(optimize, 'evaluate', side_effect=[slow, fast, slow, slow, fast]):
+            fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1,
+                    'speedup': 2.0, 'paired_speedups': [2, 2, 2, 2, 2]}
+            rejected = {**slow, 'paired_speedups': [0.5, 0.5, 0.5, 0.5, 0.5]}
+            with (patch.object(optimize, 'evaluate', return_value=slow),
+                  patch.object(optimize, 'evaluate_pair',
+                               side_effect=[(slow, fast), (fast, rejected)])):
                 report = optimize.optimize(active, root / 'run')
             self.assertTrue(report['changed'])
             self.assertEqual(active.read_bytes(), (root / 'run/selected.py').read_bytes())
@@ -52,13 +59,32 @@ class SearchTests(unittest.TestCase):
             unrelated.write_text('preserve me')
             active.with_suffix('.candidate.tmp').symlink_to(unrelated)
             slow = {'candidate_ms': [2, 2.1, 2.2], 'candidate_median_ms': 2.1, 'speedup': 1.0}
-            fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1, 'speedup': 2.0}
-            with patch.object(optimize, 'evaluate', side_effect=[slow, fast, slow, slow, fast]):
+            fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1,
+                    'speedup': 2.0, 'paired_speedups': [2, 2, 2, 2, 2]}
+            rejected = {**slow, 'paired_speedups': [0.5, 0.5, 0.5, 0.5, 0.5]}
+            with (patch.object(optimize, 'evaluate', return_value=slow),
+                  patch.object(optimize, 'evaluate_pair',
+                               side_effect=[(slow, fast), (fast, rejected)])):
                 report = optimize.optimize(active, root / 'run')
             self.assertTrue(report['changed'])
             self.assertEqual(unrelated.read_text(), 'preserve me')
             self.assertFalse(active.is_symlink())
             self.assertEqual(active.read_bytes(), (root / 'run/selected.py').read_bytes())
+
+    def test_paired_gate_requires_effect_and_all_five_consistent_pairs(self):
+        incumbent = {'candidate_ms': [2] * 5, 'candidate_median_ms': 2, 'speedup': 1}
+        candidate = {'candidate_ms': [1] * 5, 'candidate_median_ms': 1, 'speedup': 2,
+                     'paired_speedups': [1.2] * 5}
+        self.assertTrue(optimize.select_candidate(incumbent, candidate, 1.05))
+        candidate['paired_speedups'][-1] = 0.99
+        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05))
+        candidate['paired_speedups'] = [1.01] * 5
+        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05))
+
+    def test_exact_sign_pvalue_handles_ties_and_direction(self):
+        self.assertEqual(optimize.exact_paired_sign_pvalue([1.2] * 5), 1 / 32)
+        self.assertEqual(optimize.exact_paired_sign_pvalue([0.8] * 5), 1.0)
+        self.assertEqual(optimize.exact_paired_sign_pvalue([1.0] * 5), 1.0)
 
     def test_pending_and_nonfinite_results_not_projected(self):
         with tempfile.TemporaryDirectory() as tmp:

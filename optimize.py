@@ -72,8 +72,92 @@ def evaluate(contract, device, seed, repeats, iterations):
             "shape": list(cfg.timing_shape), "correctness": "PASS"}
 
 
+def exact_paired_sign_pvalue(paired_speedups):
+    """One-sided exact sign-test p-value for candidate-faster pairs."""
+    non_ties = [value for value in paired_speedups if value != 1]
+    if not non_ties:
+        return 1.0
+    favorable = sum(value > 1 for value in non_ties)
+    return sum(math.comb(len(non_ties), count)
+               for count in range(favorable, len(non_ties) + 1)) / (2 ** len(non_ties))
+
+
+def evaluate_pair(incumbent, candidate, device, seed, repeats, iterations):
+    """Validate the candidate, then time candidate/incumbent/reference together."""
+    if incumbent.kernel_type != candidate.kernel_type:
+        raise ValueError("Candidate changed kernel type")
+    cfg = get_benchmark_config(candidate.kernel_type)
+    baseline = validate_kernel_module(load_kernel_module(
+        str(Path(__file__).parent / "kernels" / f"{candidate.kernel_type}.py")
+    ))
+    incumbent = replace(incumbent, get_inputs=baseline.get_inputs)
+    candidate = replace(candidate, get_inputs=baseline.get_inputs)
+    with torch.inference_mode():
+        for offset in range(3):
+            torch.manual_seed(seed + offset)
+            summary = run_correctness_checks(candidate, cfg, device, quick=False)
+            if summary.overall != "PASS":
+                raise ValueError(f"correctness failed: {asdict(summary)}")
+        for shape in [(1, 7, 31), (3, 9, 65)]:
+            inputs = cfg.input_builder(candidate, device, shape)
+            ok, _, detail = run_correctness_pass(
+                candidate, REFERENCE_FUNCTIONS[candidate.kernel_type],
+                inputs, cfg.atol, cfg.rtol,
+            )
+            if not ok:
+                raise ValueError(detail)
+
+        torch.manual_seed(seed + 101)
+        inputs = cfg.input_builder(candidate, device, cfg.timing_shape)
+        implementations = {
+            "candidate": candidate.kernel_fn,
+            "incumbent": incumbent.kernel_fn,
+            "reference": REFERENCE_FUNCTIONS[candidate.kernel_type],
+        }
+        samples = {name: [] for name in implementations}
+        orders = []
+        order_rng = random.Random(seed)
+        for _ in range(repeats):
+            order = list(implementations)
+            order_rng.shuffle(order)
+            orders.append(order)
+            for name in order:
+                seconds = benchmark_callable(
+                    lambda fn=implementations[name]: fn(**inputs), device, 3, iterations
+                )
+                samples[name].append(seconds * 1000)
+
+    reference_median = statistics.median(samples["reference"])
+    incumbent_median = statistics.median(samples["incumbent"])
+    candidate_median = statistics.median(samples["candidate"])
+    paired_speedups = [incumbent_ms / candidate_ms for incumbent_ms, candidate_ms
+                       in zip(samples["incumbent"], samples["candidate"])]
+    common = {"reference_ms": samples["reference"],
+              "reference_median_ms": reference_median,
+              "shape": list(cfg.timing_shape), "correctness": "PASS", "orders": orders}
+    incumbent_result = {**common, "candidate_ms": samples["incumbent"],
+                        "candidate_median_ms": incumbent_median,
+                        "speedup": reference_median / incumbent_median}
+    candidate_result = {**common, "candidate_ms": samples["candidate"],
+                        "candidate_median_ms": candidate_median,
+                        "speedup": reference_median / candidate_median,
+                        "paired_speedups": paired_speedups,
+                        "paired_median_speedup": statistics.median(paired_speedups),
+                        "paired_sign_pvalue": exact_paired_sign_pvalue(paired_speedups)}
+    return incumbent_result, candidate_result
+
+
 def select_candidate(incumbent, candidate, minimum_speedup):
-    """Require a material improvement and nonoverlapping observed timing ranges."""
+    """Require a material paired effect and an exact one-sided sign-test gate."""
+    if "paired_speedups" in candidate:
+        paired = candidate["paired_speedups"]
+        if (not isinstance(paired, list) or len(paired) < 3
+                or any(not isinstance(value, (int, float))
+                       or not math.isfinite(value) or value <= 0 for value in paired)):
+            return False
+        return (statistics.median(paired) >= minimum_speedup
+                and exact_paired_sign_pvalue(paired) <= 0.05)
+    # Compatibility for old reports and third-party callers without paired data.
     return (candidate["candidate_median_ms"] * minimum_speedup < incumbent["candidate_median_ms"]
             and max(candidate["candidate_ms"]) < min(incumbent["candidate_ms"])
             and candidate.get("speedup", 1.) > incumbent.get("speedup", 1.) * minimum_speedup)
@@ -111,20 +195,22 @@ def optimize(kernel_file, output, device="cpu", seed=42, repeats=5, iterations=2
             contract = validate_kernel_module(load_kernel_module(str(snapshot)))
             if contract.kernel_type != incumbent.kernel_type:
                 raise ValueError("Candidate changed kernel type")
-            result = evaluate(contract, device, seed, repeats, iterations)
-            trial.update(result)
-            # Remeasure the incumbent near each comparison to reduce drift.
+            # Interleave candidate, incumbent and common reference in each
+            # repeat so transient drift cannot masquerade as a separate-block win.
             incumbent_snapshot = output / f"incumbent-{index:03d}.py"
             incumbent_snapshot.write_bytes(best_source)
             incumbent_contract = validate_kernel_module(load_kernel_module(str(incumbent_snapshot)))
-            best = evaluate(incumbent_contract, device, seed, repeats, iterations)
+            best, result = evaluate_pair(
+                incumbent_contract, contract, device, seed, repeats, iterations
+            )
+            trial.update(result)
             trial["incumbent_comparison"] = best
             if select_candidate(best, result, minimum_speedup):
                 best_source, best = source_bytes, result
                 trial["accepted"] = True
-                trial["decision"] = "improvement exceeded threshold and observed timing ranges did not overlap"
+                trial["decision"] = "paired median exceeded threshold and one-sided sign gate passed"
             else:
-                trial["decision"] = "rejected: insufficient improvement or overlapping timing ranges"
+                trial["decision"] = "rejected: paired effect or one-sided sign gate failed"
         except Exception as error:
             trial["decision"] = "rejected: evaluation failed"
             trial["error"] = f"{type(error).__name__}: {error}"

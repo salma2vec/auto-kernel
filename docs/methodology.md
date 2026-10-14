@@ -20,9 +20,11 @@ The harness currently evaluates forward operations in FP32. It is not a backward
 
 Synchronized wall-clock measurements include dispatch costs. Timing ranges and paired-reference speedups reduce common noise but are not a hypothesis test and cannot eliminate thermal or scheduler drift. Benchmark on idle dedicated hardware, fix thread counts/power settings, repeat full runs, and compare appropriate vendor/compiler baselines. Peak-memory accounting and model-level memory validation remain limited. Candidate modules are trusted executable code; process and OS isolation are required for adversarial programs.
 
-The promotion rule has a separate prospective [null and sensitivity calibration
-protocol](search-calibration-protocol.md). It exercises the deployed heuristic
-without treating a same-code comparison as an optimization result.
+The original promotion rule's prospective [null and sensitivity calibration](search-calibration.md)
+failed. Its separately timed blocks were both insensitive on CPU and produced a
+false promotion on MPS. The replacement has a frozen [paired calibration
+protocol](search-calibration-v2-protocol.md): candidate, incumbent and reference
+are interleaved, then a practical paired effect and exact sign gate are required.
 
 ## Primary research context
 

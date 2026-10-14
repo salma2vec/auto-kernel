@@ -31,6 +31,12 @@ runs, with 480 correctness checks and zero promotions in 30 same-code controls.
 It matched the always-native baseline exactly: integration succeeded, while the
 separate added-search-value gate failed. This is not a pretrained-model result.
 
+[Search-decision calibration](docs/search-calibration.md) found that the original
+separate-block timing rule missed obvious slowdown controls and produced one
+same-code false promotion on MPS. The search now interleaves candidate, incumbent
+and reference timings and requires a paired effect plus an exact sign gate. This
+is reliability work; it does not change the failed added-search-value result.
+
 ## Automatic search
 
 `optimize.py` generates candidates with explicit hypotheses (for example, replacing a separate matrix multiplication and bias addition with a native linear operation), validates them, and makes accept/reject decisions. For RMSNorm it tests multiplication-based squaring and native normalization where supported. LayerNorm and Softmax currently have a native no-change control. Unsupported operators fail visibly as rejected trials.
@@ -42,7 +48,7 @@ python optimize.py --device cpu --seed 42 --repeats 5 --iterations 25 \
 
 Each new output directory contains the original source, candidate sources, selected source, source hashes, environment information, raw repeat timings, correctness results, hypotheses and rejection reasons. The active kernel stays untouched during trials. The final selected source replaces it only after the search finishes; failed or slower candidates leave the incumbent intact. Existing output directories are rejected so experiments cannot silently overwrite one another.
 
-Checks use trusted baseline input generators, three random seeds, multiple shapes, numerical scales, edge cases, additional odd-sized shapes and input-mutation detection. Timing excludes input construction/cloning and synchronizes CUDA work. Candidate and reference order is shuffled per repeat. Promotion requires a material improvement against a freshly remeasured incumbent, nonoverlapping observed timing ranges, and improved speedup relative to the paired reference. This is a conservative heuristic, not a statistical confidence interval.
+Checks use trusted baseline input generators, three random seeds, multiple shapes, numerical scales, edge cases, additional odd-sized shapes and input-mutation detection. Timing excludes input construction/cloning and synchronizes CUDA work. Candidate, incumbent and common reference order is shuffled within each repeat. Promotion requires a material median improvement across paired candidate/incumbent timings and a one-sided exact sign-test gate. This is a small-sample local decision rule, not evidence of general performance.
 
 An additional implementation can be evaluated with `--candidate path/to/candidate.py`. It must satisfy the same contract as [kernel.py](kernel.py). **Candidate Python modules execute with the current user's privileges.** This runner is for trusted local code; it is not a sandbox for arbitrary downloaded or model-generated programs.
 
