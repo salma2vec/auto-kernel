@@ -24,7 +24,12 @@ from reference import REFERENCE_FUNCTIONS
 from auto_kernel.workspace import write_bytes_atomic
 
 
-MAX_PAIRED_SIGN_PVALUE = 0.05
+# The search may make up to 100 promotion decisions in one family.  Bonferroni
+# control keeps the per-decision one-sided sign threshold at 0.05 / 100.
+FAMILYWISE_ALPHA = 0.05
+MAX_PROMOTION_DECISIONS = 100
+MAX_PAIRED_SIGN_PVALUE = FAMILYWISE_ALPHA / MAX_PROMOTION_DECISIONS
+MINIMUM_PAIRED_REPEATS = 11
 
 
 def candidates(kernel_type):
@@ -85,6 +90,20 @@ def exact_paired_sign_pvalue(paired_speedups):
                for count in range(favorable, len(non_ties) + 1)) / (2 ** len(non_ties))
 
 
+def balanced_orders(seed, repeats):
+    """Return deterministic cyclic orders with near-equal timing positions."""
+    rng = random.Random(seed)
+    base = ["candidate", "incumbent", "reference"]
+    rng.shuffle(base)
+    rotations = [base[index:] + base[:index] for index in range(len(base))]
+    orders = []
+    while len(orders) < repeats:
+        cycle = [order.copy() for order in rotations]
+        rng.shuffle(cycle)
+        orders.extend(cycle)
+    return orders[:repeats]
+
+
 def evaluate_pair(incumbent, candidate, device, seed, repeats, iterations):
     """Validate the candidate, then time candidate/incumbent/reference together."""
     if incumbent.kernel_type != candidate.kernel_type:
@@ -119,10 +138,7 @@ def evaluate_pair(incumbent, candidate, device, seed, repeats, iterations):
         }
         samples = {name: [] for name in implementations}
         orders = []
-        order_rng = random.Random(seed)
-        for _ in range(repeats):
-            order = list(implementations)
-            order_rng.shuffle(order)
+        for order in balanced_orders(seed, repeats):
             orders.append(order)
             for name in order:
                 seconds = benchmark_callable(
@@ -150,7 +166,8 @@ def evaluate_pair(incumbent, candidate, device, seed, repeats, iterations):
     return incumbent_result, candidate_result
 
 
-def select_candidate(incumbent, candidate, minimum_speedup):
+def select_candidate(incumbent, candidate, minimum_speedup,
+                     maximum_sign_pvalue=MAX_PAIRED_SIGN_PVALUE):
     """Require a material paired effect and an exact one-sided sign-test gate."""
     if "paired_speedups" in candidate:
         paired = candidate["paired_speedups"]
@@ -159,21 +176,32 @@ def select_candidate(incumbent, candidate, minimum_speedup):
                        or not math.isfinite(value) or value <= 0 for value in paired)):
             return False
         return (statistics.median(paired) >= minimum_speedup
-                and exact_paired_sign_pvalue(paired) <= MAX_PAIRED_SIGN_PVALUE)
+                and exact_paired_sign_pvalue(paired) <= maximum_sign_pvalue)
     # Compatibility for old reports and third-party callers without paired data.
     return (candidate["candidate_median_ms"] * minimum_speedup < incumbent["candidate_median_ms"]
             and max(candidate["candidate_ms"]) < min(incumbent["candidate_ms"])
             and candidate.get("speedup", 1.) > incumbent.get("speedup", 1.) * minimum_speedup)
 
 
-def optimize(kernel_file, output, device="cpu", seed=42, repeats=5, iterations=25, minimum_speedup=1.05, extra_candidates=()):
-    if repeats < 3 or iterations < 1 or not math.isfinite(minimum_speedup) or minimum_speedup <= 1:
-        raise ValueError("Require repeats >= 3, iterations >= 1 and minimum_speedup > 1")
+def optimize(kernel_file, output, device="cpu", seed=42, repeats=MINIMUM_PAIRED_REPEATS,
+             iterations=25, minimum_speedup=1.05, extra_candidates=()):
+    if (repeats < MINIMUM_PAIRED_REPEATS or iterations < 1
+            or not math.isfinite(minimum_speedup) or minimum_speedup <= 1):
+        raise ValueError(
+            f"Require repeats >= {MINIMUM_PAIRED_REPEATS}, iterations >= 1 "
+            "and minimum_speedup > 1"
+        )
     kernel_file, output = Path(kernel_file), Path(output)
     output.mkdir(parents=True, exist_ok=False)
     original = kernel_file.read_bytes()
     (output / "baseline.py").write_bytes(original)
     incumbent = validate_kernel_module(load_kernel_module(str(kernel_file)))
+    proposals = candidates(incumbent.kernel_type)
+    for path in extra_candidates:
+        path = Path(path)
+        proposals.append((path.stem, "User-supplied trusted local implementation.", path.read_text()))
+    if len(proposals) > MAX_PROMOTION_DECISIONS:
+        raise ValueError(f"At most {MAX_PROMOTION_DECISIONS} promotion decisions are allowed")
     initial = evaluate(incumbent, device, seed, repeats, iterations)
     report = {"schema_version": 1, "seed": seed, "device": device,
               "torch": torch.__version__, "python": platform.python_version(),
@@ -181,13 +209,13 @@ def optimize(kernel_file, output, device="cpu", seed=42, repeats=5, iterations=2
               "gpu": torch.cuda.get_device_name(device) if device.startswith("cuda") else None,
               "tf32_matmul": torch.backends.cuda.matmul.allow_tf32,
               "iterations": iterations, "repeats": repeats, "minimum_speedup": minimum_speedup,
+              "promotion_family_size": len(proposals),
+              "maximum_promotion_decisions": MAX_PROMOTION_DECISIONS,
+              "familywise_alpha": FAMILYWISE_ALPHA,
+              "maximum_one_sided_sign_pvalue": MAX_PAIRED_SIGN_PVALUE,
               "baseline_sha256": hashlib.sha256(original).hexdigest(),
               "kernel_type": incumbent.kernel_type, "baseline": initial, "trials": []}
     best_source, best = original, initial
-    proposals = candidates(incumbent.kernel_type)
-    for path in extra_candidates:
-        path = Path(path)
-        proposals.append((path.stem, "User-supplied trusted local implementation.", path.read_text()))
     for index, (name, hypothesis, source) in enumerate(proposals):
         source_bytes = source.encode()
         snapshot = output / f"candidate-{index:03d}.py"
@@ -238,7 +266,7 @@ def main():
     parser.add_argument("--output", default="workspace/search")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=MINIMUM_PAIRED_REPEATS)
     parser.add_argument("--iterations", type=int, default=25)
     parser.add_argument("--minimum-speedup", type=float, default=1.05)
     parser.add_argument("--candidate", action="append", default=[], help="Trusted local Python module; executes with your privileges")

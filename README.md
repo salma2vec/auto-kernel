@@ -45,11 +45,16 @@ added-search-value result.
 `optimize.py` generates candidates with explicit hypotheses (for example, replacing a separate matrix multiplication and bias addition with a native linear operation), validates them, and makes accept/reject decisions. For RMSNorm it tests multiplication-based squaring and native normalization where supported. LayerNorm and Softmax currently have a native no-change control. Unsupported operators fail visibly as rejected trials.
 
 ```bash
-python optimize.py --device cpu --seed 42 --repeats 5 --iterations 25 \
+python optimize.py --device cpu --seed 42 --repeats 11 --iterations 25 \
   --minimum-speedup 1.05 --output workspace/search-002
 ```
 
 Each new output directory contains the original source, candidate sources, selected source, source hashes, environment information, raw repeat timings, correctness results, hypotheses and rejection reasons. The active kernel stays untouched during trials. The final selected source replaces it only after the search finishes; failed or slower candidates leave the incumbent intact. Existing output directories are rejected so experiments cannot silently overwrite one another.
+
+The calibrated family-wise rule requires at least 11 paired timing repetitions
+and limits one search to 100 promotion decisions, including user-supplied
+candidates. The report records the family size, family-wise alpha and per-decision
+sign threshold.
 
 Checks use trusted baseline input generators, three random seeds, multiple shapes, numerical scales, edge cases, additional odd-sized shapes and input-mutation detection. Timing excludes input construction/cloning and synchronizes CUDA work. Candidate, incumbent and common reference order is shuffled within each repeat. Promotion requires a material median improvement across paired candidate/incumbent timings and a one-sided exact sign-test gate. This is a small-sample local decision rule, not evidence of general performance.
 

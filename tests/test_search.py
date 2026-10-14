@@ -17,7 +17,7 @@ class SearchTests(unittest.TestCase):
             source = 'from kernels.rms_norm import *\n'
             active.write_text(source)
             result = {'candidate_ms': [2, 2, 2], 'candidate_median_ms': 2, 'speedup': 1}
-            rejected = {**result, 'paired_speedups': [1, 1, 1, 1, 1]}
+            rejected = {**result, 'paired_speedups': [1] * 11}
             with (patch.object(optimize, 'evaluate', return_value=result),
                   patch.object(optimize, 'evaluate_pair',
                                side_effect=[(result, rejected), RuntimeError('bad')])):
@@ -35,8 +35,8 @@ class SearchTests(unittest.TestCase):
             active.write_text('from kernels.rms_norm import *\n')
             slow = {'candidate_ms': [2, 2.1, 2.2], 'candidate_median_ms': 2.1, 'speedup': 1.0}
             fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1,
-                    'speedup': 2.0, 'paired_speedups': [2, 2, 2, 2, 2]}
-            rejected = {**slow, 'paired_speedups': [0.5, 0.5, 0.5, 0.5, 0.5]}
+                    'speedup': 2.0, 'paired_speedups': [2] * 11}
+            rejected = {**slow, 'paired_speedups': [0.5] * 11}
             with (patch.object(optimize, 'evaluate', return_value=slow),
                   patch.object(optimize, 'evaluate_pair',
                                side_effect=[(slow, fast), (fast, rejected)])):
@@ -44,6 +44,9 @@ class SearchTests(unittest.TestCase):
             self.assertTrue(report['changed'])
             self.assertEqual(active.read_bytes(), (root / 'run/selected.py').read_bytes())
             self.assertTrue(report['trials'][0]['accepted'])
+            self.assertEqual(report['repeats'], 11)
+            self.assertEqual(report['maximum_promotion_decisions'], 100)
+            self.assertEqual(report['maximum_one_sided_sign_pvalue'], 0.0005)
 
     def test_path_traversal_kernel_type_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,8 +63,8 @@ class SearchTests(unittest.TestCase):
             active.with_suffix('.candidate.tmp').symlink_to(unrelated)
             slow = {'candidate_ms': [2, 2.1, 2.2], 'candidate_median_ms': 2.1, 'speedup': 1.0}
             fast = {'candidate_ms': [1, 1.1, 1.2], 'candidate_median_ms': 1.1,
-                    'speedup': 2.0, 'paired_speedups': [2, 2, 2, 2, 2]}
-            rejected = {**slow, 'paired_speedups': [0.5, 0.5, 0.5, 0.5, 0.5]}
+                    'speedup': 2.0, 'paired_speedups': [2] * 11}
+            rejected = {**slow, 'paired_speedups': [0.5] * 11}
             with (patch.object(optimize, 'evaluate', return_value=slow),
                   patch.object(optimize, 'evaluate_pair',
                                side_effect=[(slow, fast), (fast, rejected)])):
@@ -75,16 +78,27 @@ class SearchTests(unittest.TestCase):
         incumbent = {'candidate_ms': [2] * 5, 'candidate_median_ms': 2, 'speedup': 1}
         candidate = {'candidate_ms': [1] * 5, 'candidate_median_ms': 1, 'speedup': 2,
                      'paired_speedups': [1.2] * 5}
-        self.assertTrue(optimize.select_candidate(incumbent, candidate, 1.05))
+        self.assertTrue(optimize.select_candidate(incumbent, candidate, 1.05, 0.05))
         candidate['paired_speedups'][-1] = 0.99
-        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05))
+        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05, 0.05))
         candidate['paired_speedups'] = [1.01] * 5
-        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05))
+        self.assertFalse(optimize.select_candidate(incumbent, candidate, 1.05, 0.05))
 
     def test_exact_sign_pvalue_handles_ties_and_direction(self):
         self.assertEqual(optimize.exact_paired_sign_pvalue([1.2] * 5), 1 / 32)
         self.assertEqual(optimize.exact_paired_sign_pvalue([0.8] * 5), 1.0)
         self.assertEqual(optimize.exact_paired_sign_pvalue([1.0] * 5), 1.0)
+
+    def test_search_rejects_too_few_repeats_and_too_many_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / 'kernel.py'
+            active.write_text('from kernels.rms_norm import *\n')
+            with self.assertRaisesRegex(ValueError, 'repeats >= 11'):
+                optimize.optimize(active, root / 'short', repeats=10)
+            with self.assertRaisesRegex(ValueError, 'At most 100'):
+                optimize.optimize(active, root / 'large-family',
+                                  extra_candidates=[active] * 99)
 
     def test_pending_and_nonfinite_results_not_projected(self):
         with tempfile.TemporaryDirectory() as tmp:

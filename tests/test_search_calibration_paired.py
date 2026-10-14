@@ -48,7 +48,7 @@ class PairedSearchCalibrationTests(unittest.TestCase):
                 acceptance_gate(tampered)
 
     def test_gate_rejects_missing_or_nonfinite_raw_trials(self):
-        with self.assertRaisesRegex(ValueError, "every fixed v2 trial"):
+        with self.assertRaisesRegex(ValueError, "every fixed protocol trial"):
             acceptance_gate(complete_trials()[:-1])
         trials = complete_trials()
         trials[0]["candidate"]["candidate_ms"][0] = math.nan

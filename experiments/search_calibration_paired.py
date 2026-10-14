@@ -22,7 +22,7 @@ from experiments.search_calibration import (
     native_rms,
     slowed_native_rms,
 )
-from optimize import MAX_PAIRED_SIGN_PVALUE, exact_paired_sign_pvalue, select_candidate
+from optimize import balanced_orders, exact_paired_sign_pvalue, select_candidate
 from prepare import collect_environment_report, resolve_device
 
 
@@ -35,7 +35,7 @@ PROTOCOL = {
     "iterations": 25,
     "warmup": 3,
     "minimum_paired_speedup": 1.05,
-    "maximum_one_sided_sign_pvalue": MAX_PAIRED_SIGN_PVALUE,
+    "maximum_one_sided_sign_pvalue": 0.05,
     "slowdown_clones": 8,
     "maximum_false_promotions": 0,
     "minimum_positive_detections": 19,
@@ -44,23 +44,27 @@ PROTOCOL = {
 }
 
 
-def measure_paired(candidate_fn, incumbent_fn, inputs, weight, device, seed):
+def measure_paired(candidate_fn, incumbent_fn, inputs, weight, device, seed, protocol=PROTOCOL):
     implementations = {
         "candidate": candidate_fn,
         "incumbent": incumbent_fn,
         "reference": explicit_rms,
     }
     samples = {name: [] for name in implementations}
-    orders = []
-    rng = random.Random(seed)
-    for _ in range(PROTOCOL["repeats"]):
-        order = list(implementations)
-        rng.shuffle(order)
-        orders.append(order)
+    if protocol.get("order_strategy") == "balanced_cyclic":
+        orders = balanced_orders(seed, protocol["repeats"])
+    else:
+        orders = []
+        rng = random.Random(seed)
+        for _ in range(protocol["repeats"]):
+            order = list(implementations)
+            rng.shuffle(order)
+            orders.append(order)
+    for order in orders:
         for name in order:
             seconds = benchmark_callable(
                 lambda fn=implementations[name]: fn(inputs, weight),
-                device, PROTOCOL["warmup"], PROTOCOL["iterations"],
+                device, protocol["warmup"], protocol["iterations"],
             )
             milliseconds = seconds * 1000
             if not math.isfinite(milliseconds) or milliseconds <= 0:
@@ -85,11 +89,16 @@ def measure_paired(candidate_fn, incumbent_fn, inputs, weight, device, seed):
     return incumbent, candidate
 
 
-def run_trial(kind, shape, seed, device):
+def run_trial(kind, shape, seed, device, protocol=PROTOCOL):
     inputs, weight = make_inputs(shape, seed, device)
     incumbent_fn = native_rms if kind == "null" else slowed_native_rms
-    incumbent, candidate = measure_paired(native_rms, incumbent_fn, inputs, weight, device, seed)
-    accepted = select_candidate(incumbent, candidate, PROTOCOL["minimum_paired_speedup"])
+    incumbent, candidate = measure_paired(
+        native_rms, incumbent_fn, inputs, weight, device, seed, protocol
+    )
+    accepted = select_candidate(
+        incumbent, candidate, protocol["minimum_paired_speedup"],
+        protocol["maximum_one_sided_sign_pvalue"],
+    )
     return {"kind": kind, "seed": seed, "shape": list(shape),
             "incumbent": incumbent, "candidate": candidate, "accepted": accepted}
 
@@ -100,35 +109,43 @@ def _matches(left, right):
             and math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-15))
 
 
-def acceptance_gate(trials):
+def acceptance_gate(trials, protocol=PROTOCOL):
+    if 2 ** (-protocol["repeats"]) > protocol["maximum_one_sided_sign_pvalue"]:
+        raise ValueError("Protocol has too few repeats for its sign threshold")
+    if "familywise_alpha" in protocol:
+        family_size = protocol.get("null_decision_family_size")
+        if (family_size != len(protocol["null_seeds"])
+                or not _matches(protocol["maximum_one_sided_sign_pvalue"],
+                                protocol["familywise_alpha"] / family_size)):
+            raise ValueError("Protocol family size and Bonferroni threshold disagree")
     expected = {
-        ("null", seed, tuple(PROTOCOL["shapes"][index % len(PROTOCOL["shapes"])]))
-        for index, seed in enumerate(PROTOCOL["null_seeds"])
+        ("null", seed, tuple(protocol["shapes"][index % len(protocol["shapes"])]))
+        for index, seed in enumerate(protocol["null_seeds"])
     }
     expected |= {
-        ("positive", seed, tuple(PROTOCOL["shapes"][index % len(PROTOCOL["shapes"])]))
-        for index, seed in enumerate(PROTOCOL["positive_seeds"])
+        ("positive", seed, tuple(protocol["shapes"][index % len(protocol["shapes"])]))
+        for index, seed in enumerate(protocol["positive_seeds"])
     }
     observed = {(row.get("kind"), row.get("seed"), tuple(row.get("shape", [])))
                 for row in trials}
     if len(trials) != len(expected) or observed != expected:
-        raise ValueError("Acceptance requires every fixed v2 trial exactly once")
+        raise ValueError("Acceptance requires every fixed protocol trial exactly once")
 
     counts = {str(shape): {"null_trials": 0, "false_promotions": 0,
                            "positive_trials": 0, "positive_detections": 0}
-              for shape in PROTOCOL["shapes"]}
+              for shape in protocol["shapes"]}
     for row in trials:
         candidate = row.get("candidate", {})
         incumbent = row.get("incumbent", {})
         for record in (candidate, incumbent):
             for key in ("candidate_ms", "reference_ms"):
                 values = record.get(key)
-                if (not isinstance(values, list) or len(values) != PROTOCOL["repeats"]
+                if (not isinstance(values, list) or len(values) != protocol["repeats"]
                         or any(type(value) not in (int, float)
                                or not math.isfinite(value) or value <= 0 for value in values)):
                     raise ValueError("Acceptance requires complete finite positive raw timings")
             orders = record.get("orders")
-            if (not isinstance(orders, list) or len(orders) != PROTOCOL["repeats"]
+            if (not isinstance(orders, list) or len(orders) != protocol["repeats"]
                     or any(not isinstance(order, list)
                            or sorted(order) != ["candidate", "incumbent", "reference"]
                            for order in orders)):
@@ -136,6 +153,9 @@ def acceptance_gate(trials):
         if (candidate["reference_ms"] != incumbent["reference_ms"]
                 or candidate["orders"] != incumbent["orders"]):
             raise ValueError("Candidate and incumbent must share reference blocks and orders")
+        if (protocol.get("order_strategy") == "balanced_cyclic"
+                and candidate["orders"] != balanced_orders(row["seed"], protocol["repeats"])):
+            raise ValueError("Stored orders do not match the frozen balanced schedule")
 
         candidate_median = statistics.median(candidate["candidate_ms"])
         incumbent_median = statistics.median(incumbent["candidate_ms"])
@@ -164,7 +184,8 @@ def acceptance_gate(trials):
 
         recomputed_candidate = {**candidate, "paired_speedups": paired}
         accepted = select_candidate(
-            incumbent, recomputed_candidate, PROTOCOL["minimum_paired_speedup"]
+            incumbent, recomputed_candidate, protocol["minimum_paired_speedup"],
+            protocol["maximum_one_sided_sign_pvalue"],
         )
         if type(row.get("accepted")) is not bool or row["accepted"] != accepted:
             raise ValueError("Stored decision does not match the frozen paired rule")
@@ -178,12 +199,12 @@ def acceptance_gate(trials):
     false_promotions = sum(row["false_promotions"] for row in counts.values())
     positive_detections = sum(row["positive_detections"] for row in counts.values())
     per_shape_positive_gate = all(
-        row["positive_detections"] >= PROTOCOL["minimum_positive_detections_per_shape"]
+        row["positive_detections"] >= protocol["minimum_positive_detections_per_shape"]
         for row in counts.values()
     )
-    no_false_promotions = false_promotions <= PROTOCOL["maximum_false_promotions"]
+    no_false_promotions = false_promotions <= protocol["maximum_false_promotions"]
     positive_sensitivity = (
-        positive_detections >= PROTOCOL["minimum_positive_detections"]
+        positive_detections >= protocol["minimum_positive_detections"]
         and per_shape_positive_gate
     )
     return {
@@ -201,7 +222,10 @@ def acceptance_gate(trials):
     }
 
 
-def run(output, device="cpu"):
+def run(output, device="cpu", *, protocol=PROTOCOL,
+        protocol_path="docs/search-calibration-v2-protocol.md",
+        scope="Paired RMSNorm decision controls; no CUDA or kernel-speedup claim",
+        additional_sources=(), correctness_seed=2000):
     root = Path(__file__).resolve().parents[1]
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
@@ -218,17 +242,17 @@ def run(output, device="cpu"):
     output.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(1)
     sources = [Path(__file__), root / "experiments/search_calibration.py",
-               root / "optimize.py", root / "auto_kernel/timing.py",
-               root / "docs/search-calibration-v2-protocol.md"]
+               root / "optimize.py", root / "auto_kernel/timing.py", root / protocol_path]
+    sources.extend(root / path for path in additional_sources)
     report = {
-        "schema_version": 1, "protocol": PROTOCOL, "source_commit": revision,
+        "schema_version": 1, "protocol": protocol, "source_commit": revision,
         "source_clean": True,
         "source_sha256": {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in sources},
         "python": platform.python_version(), "torch": torch.__version__,
         "platform": platform.platform(), "device": device, "threads": 1,
         "environment": collect_environment_report(), "mps_cpu_fallback_enabled": False,
-        "scope": "Paired RMSNorm decision controls; no CUDA or kernel-speedup claim",
+        "scope": scope,
         "correctness": [], "trials": [], "complete": False,
     }
 
@@ -237,16 +261,18 @@ def run(output, device="cpu"):
         write_bytes_atomic(output / "report.json", encoded)
 
     try:
-        for index, shape in enumerate(PROTOCOL["shapes"]):
-            report["correctness"].append(check_control_correctness(shape, 2000 + index, device))
-        schedule = [("null", seed) for seed in PROTOCOL["null_seeds"]]
-        schedule += [("positive", seed) for seed in PROTOCOL["positive_seeds"]]
+        for index, shape in enumerate(protocol["shapes"]):
+            report["correctness"].append(
+                check_control_correctness(shape, correctness_seed + index, device)
+            )
+        schedule = [("null", seed) for seed in protocol["null_seeds"]]
+        schedule += [("positive", seed) for seed in protocol["positive_seeds"]]
         for kind, seed in schedule:
-            seeds = PROTOCOL[f"{kind}_seeds"]
-            shape = PROTOCOL["shapes"][seeds.index(seed) % len(PROTOCOL["shapes"])]
-            report["trials"].append(run_trial(kind, shape, seed, device))
+            seeds = protocol[f"{kind}_seeds"]
+            shape = protocol["shapes"][seeds.index(seed) % len(protocol["shapes"])]
+            report["trials"].append(run_trial(kind, shape, seed, device, protocol))
             write_report()
-        report["acceptance"] = acceptance_gate(report["trials"])
+        report["acceptance"] = acceptance_gate(report["trials"], protocol)
         report["complete"] = True
         report["passed"] = report["acceptance"]["passed"]
         write_report()

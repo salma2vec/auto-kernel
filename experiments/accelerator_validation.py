@@ -15,7 +15,7 @@ from prepare import collect_environment_report, resolve_device
 from reference import REFERENCE_FUNCTIONS
 
 
-def run(output, device, seeds=(42, 43, 44), repeats=5, iterations=25):
+def run(output, device, seeds=(42, 43, 44), repeats=11, iterations=25):
     device = resolve_device(device)
     if device.startswith("mps") and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
         raise ValueError("Disable MPS CPU fallback before accelerator validation")
@@ -75,7 +75,7 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", required=True, choices=["cpu", "mps", "cuda"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=11)
     parser.add_argument("--iterations", type=int, default=25)
     args = parser.parse_args(argv)
     report = run(args.output, args.device, args.seeds, args.repeats, args.iterations)
