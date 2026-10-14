@@ -34,8 +34,11 @@ separate added-search-value gate failed. This is not a pretrained-model result.
 [Search-decision calibration](docs/search-calibration.md) found that the original
 separate-block timing rule missed obvious slowdown controls and produced one
 same-code false promotion on MPS. The search now interleaves candidate, incumbent
-and reference timings and requires a paired effect plus an exact sign gate. This
-is reliability work; it does not change the failed added-search-value result.
+and reference timings and requires a paired effect plus an exact sign gate. A
+second frozen calibration improved slowdown detection to 19/20 on CPU and 20/20
+on MPS, but still produced one and two same-code false promotions respectively,
+so its reliability gate also failed. This does not change the failed
+added-search-value result.
 
 ## Automatic search
 

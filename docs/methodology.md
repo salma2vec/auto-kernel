@@ -25,6 +25,8 @@ failed. Its separately timed blocks were both insensitive on CPU and produced a
 false promotion on MPS. The replacement has a frozen [paired calibration
 protocol](search-calibration-v2-protocol.md): candidate, incumbent and reference
 are interleaved, then a practical paired effect and exact sign gate are required.
+That second gate also failed because same-code controls were still promoted. The
+paired rule improves local sensitivity but is not a validated automatic decision.
 
 ## Primary research context
 

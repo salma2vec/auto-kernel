@@ -1,4 +1,4 @@
-# Search-decision calibration: version 1 failed
+# Search-decision calibration: both frozen versions failed
 
 Measured on 2026-10-14 from frozen source revision `641295e` on Apple M1 CPU and
 MPS, with MPS CPU fallback disabled. Both reports contain all 100 identical-code
@@ -32,3 +32,38 @@ Raw reports:
 
 These controls test selection reliability. They do not rescue the previously
 failed added-search-value gate or establish a useful new kernel.
+
+## Version 2: pairing improved sensitivity but did not pass reliability
+
+Version 2 ran once per device from frozen revision `2c83e2e`. It interleaved
+candidate, incumbent and reference inside each block, required median paired
+speedup of at least 1.05, and required all five non-tied pairs to favor the
+candidate (`p = 1/32` under the one-sided exact sign test). The fail-closed gate
+reconstructed every timing summary, paired ratio, p-value and decision from raw
+arrays before calculating the aggregates.
+
+| Device | False promotions | Slowdown detections | Sensitivity gate | Frozen gate |
+| --- | ---: | ---: | --- | --- |
+| CPU | 1 / 100 | 19 / 20 | Passed | Failed reliability |
+| MPS | 2 / 100 | 20 / 20 | Passed | Failed reliability |
+
+Pairing materially improved detection of the artificial slowdown, from 8/20 to
+19/20 on CPU and from 17/20 to 20/20 on MPS. It did not meet the predeclared zero
+false-promotion requirement. The CPU false promotion was seed 3099 at
+`(8,128,512)` with median paired speedup 1.080247. MPS false promotions were seed
+3031 at `(8,128,512)` with 1.061495 and seed 3044 at `(1,32,512)` with 1.081122.
+Every one had five favorable pairs and sign p-value 0.03125. The single missed CPU
+positive control had a large median effect but one reversed pair, so its sign gate
+correctly rejected it.
+
+Raw reports:
+
+- [CPU v2](../experiments/results/search-calibration-cpu-v2.json.gz) — uncompressed
+  SHA256 `496dc29a223eb4d9dc2c589ced6b4c3117f5f7013241f56d66b624f7465215eb`.
+- [MPS v2](../experiments/results/search-calibration-mps-v2.json.gz) — uncompressed
+  SHA256 `0cfecb2b32fa36bb82dd35740386b3a0c27c84d75283102cb00dbb8651cf65a7`.
+
+The paired implementation is retained as a falsifiable improvement to measurement
+design, but its automatic promotion decision remains unvalidated. A subsequent
+rule needs a newly frozen, disjoint calibration; these observed seeds cannot be
+reused to tune and then validate it.
