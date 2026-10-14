@@ -1,4 +1,4 @@
-# Search-decision calibration: both frozen versions failed
+# Search-decision calibration: family-wise version passes locally
 
 Measured on 2026-10-14 from frozen source revision `641295e` on Apple M1 CPU and
 MPS, with MPS CPU fallback disabled. Both reports contain all 100 identical-code
@@ -63,7 +63,36 @@ Raw reports:
 - [MPS v2](../experiments/results/search-calibration-mps-v2.json.gz) — uncompressed
   SHA256 `0cfecb2b32fa36bb82dd35740386b3a0c27c84d75283102cb00dbb8651cf65a7`.
 
-The paired implementation is retained as a falsifiable improvement to measurement
-design, but its automatic promotion decision remains unvalidated. A subsequent
-rule needs a newly frozen, disjoint calibration; these observed seeds cannot be
-reused to tune and then validate it.
+The paired implementation improved measurement design, but version 2 did not
+validate automatic promotion. That failure motivated a newly frozen rule with
+disjoint seeds; the observed v2 seeds were not reused for validation.
+
+## Version 3: family-wise rule passed both frozen gates
+
+Version 3 was frozen at `9a4e60c` before measurement and run once per device with
+fresh disjoint seeds. It kept the 1.05 practical median effect, increased each
+trial to 11 balanced paired blocks, and divided alpha 0.05 across the declared
+family of 100 null decisions. The resulting per-decision sign threshold was
+0.0005; only 11/11 favorable non-tied pairs (`p = 1/2048`) could pass.
+
+| Device | False promotions | Slowdown detections | Per-shape detections | Frozen gate |
+| --- | ---: | ---: | --- | --- |
+| CPU | 0 / 100 | 19 / 20 | 4/5, 5/5, 5/5, 5/5 | Passed |
+| MPS | 0 / 100 | 19 / 20 | 5/5, 4/5, 5/5, 5/5 | Passed |
+
+Both missed positives had a large median effect but one reversed pair, producing
+`p = 12/2048`; the family-wise sign gate rejected them as specified. All eight
+control-correctness checks passed exactly without input mutation. The gate
+independently reconstructed raw orders, summaries, ratios, p-values and decisions.
+
+Raw reports:
+
+- [CPU v3](../experiments/results/search-calibration-cpu-v3.json.gz) — uncompressed
+  SHA256 `40ee49475c13d26092004acd16d3155899236a1b735e63f630404e2a229c6301`.
+- [MPS v3](../experiments/results/search-calibration-mps-v3.json.gz) — uncompressed
+  SHA256 `6b2f5aaac969a0157b0201e306976f9fcde047e89223275dcc9ed697d37f5da5`.
+
+This establishes that the declared decision family met its prospective controls
+on one Apple M1 CPU/MPS session. It is not a universal false-promotion rate, CUDA
+validation, or evidence that the candidate family adds value over native operators.
+The earlier workload added-search-value gate remains failed.

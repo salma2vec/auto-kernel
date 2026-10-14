@@ -49,7 +49,6 @@ def _format_optional(value: Optional[float]) -> str:
 
 def profile_kernel(contract, device: str, iterations: int, warmup: int) -> ProfileClassification:
     from bench import (
-        _clone_tree,
         _sync_if_needed,
         call_metadata_fn,
         classify_bottleneck,
@@ -121,7 +120,7 @@ def profile_workload_entry(
     if not kernel_path.is_absolute():
         kernel_path = (source_dir / kernel_path).resolve()
 
-    from bench import _clone_tree, _sync_if_needed, load_kernel_module, validate_kernel_module
+    from bench import _sync_if_needed, load_kernel_module, validate_kernel_module
 
     module = load_kernel_module(str(kernel_path))
     contract = validate_kernel_module(module)
@@ -242,7 +241,7 @@ def main() -> int:
         )
         print(f"workload_name={workload_manifest['workload_name']}")
         print(f"device={device}")
-        print(f"mode=workload")
+        print("mode=workload")
         print(f"total_time_ms={workload_manifest['total_time_ms']:.4f}")
         print(f"bottleneck_count={len(workload_manifest['bottlenecks'])}")
         if workload_manifest["bottlenecks"]:

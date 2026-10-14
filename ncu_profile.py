@@ -1,16 +1,15 @@
 import argparse
 import csv
-import shutil
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import torch
 
-from bench import _format_optional, get_benchmark_config, load_kernel_module, validate_kernel_module
+from bench import _format_optional, load_kernel_module, validate_kernel_module
 from prepare import collect_environment_report, resolve_device
 from profile import profile_kernel
 
@@ -171,7 +170,6 @@ def analytical_fallback(args: argparse.Namespace) -> int:
 def live_ncu_profile(args: argparse.Namespace) -> int:
     module = load_kernel_module("kernel.py")
     contract = validate_kernel_module(module)
-    config = get_benchmark_config(contract.kernel_type)
     experiment_id = args.experiment_id or default_experiment_id()
     csv_path = Path("ncu_reports") / f"{experiment_id}.csv"
 

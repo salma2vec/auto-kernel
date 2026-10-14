@@ -37,8 +37,10 @@ same-code false promotion on MPS. The search now interleaves candidate, incumben
 and reference timings and requires a paired effect plus an exact sign gate. A
 second frozen calibration improved slowdown detection to 19/20 on CPU and 20/20
 on MPS, but still produced one and two same-code false promotions respectively,
-so its reliability gate also failed. This does not change the failed
-added-search-value result.
+so its reliability gate also failed. A final, independently frozen
+family-wise rule used 11 balanced pairs and a 0.05/100 sign threshold; it passed
+on both CPU and MPS with 0/100 false promotions and 19/20 slowdown detections.
+This local reliability result does not change the failed added-search-value gate.
 
 ## Automatic search
 

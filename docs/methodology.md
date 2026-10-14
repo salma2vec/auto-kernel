@@ -26,7 +26,10 @@ false promotion on MPS. The replacement has a frozen [paired calibration
 protocol](search-calibration-v2-protocol.md): candidate, incumbent and reference
 are interleaved, then a practical paired effect and exact sign gate are required.
 That second gate also failed because same-code controls were still promoted. The
-paired rule improves local sensitivity but is not a validated automatic decision.
+final [family-wise protocol](search-calibration-v3-protocol.md) used fresh seeds,
+11 balanced pairs and a Bonferroni 0.05/100 sign threshold. It passed its local
+CPU and MPS controls, while remaining limited to one machine and this declared
+100-decision family.
 
 ## Primary research context
 

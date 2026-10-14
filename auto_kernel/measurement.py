@@ -2,7 +2,6 @@ import copy
 import importlib.util
 import inspect
 from pathlib import Path
-from time import perf_counter
 from types import ModuleType
 from typing import Any, Dict, Mapping
 
