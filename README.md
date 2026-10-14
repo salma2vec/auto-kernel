@@ -20,6 +20,8 @@ python -m unittest -q
 
 The default active implementation is RMSNorm. CUDA is selected when available; CPU is a functional fallback. GPU timings and Nsight Compute analysis require suitable hardware and a local CUDA/Nsight installation.
 
+[Apple M1 validation](docs/mps-validation.md) records 12 actual MPS searches with CPU-reference checks and retained raw trials. MPS is an explicit alternative backend; these measurements do not establish CUDA performance.
+
 ## Automatic search
 
 `optimize.py` generates candidates with explicit hypotheses (for example, replacing a separate matrix multiplication and bias addition with a native linear operation), validates them, and makes accept/reject decisions. For RMSNorm it tests multiplication-based squaring and native normalization where supported. LayerNorm and Softmax currently have a native no-change control. Unsupported operators fail visibly as rejected trials.
