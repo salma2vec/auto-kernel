@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -49,7 +50,11 @@ def run(output, device, seeds=(42, 43, 44), repeats=5, iterations=25):
                     actual = contract.kernel_fn(**inputs).cpu()
                     expected = REFERENCE_FUNCTIONS[op](**cpu)
                 passed, diff, detail = compare_outputs(actual, expected, config.atol, config.rtol)
-                row["cpu_reference"] = {"passed": passed, "max_abs_diff": diff, "detail": detail}
+                row["cpu_reference"] = {"passed": passed,
+                                        "max_abs_diff": diff if math.isfinite(diff) else None,
+                                        "detail": detail}
+                if not passed:
+                    raise ValueError("CPU-reference parity failed; search was not run")
                 result = optimize(active, output / name, device, seed, repeats, iterations)
                 row.update(status="completed", changed=result["changed"],
                            selected_speedup=result["selected"]["speedup"],
@@ -59,15 +64,23 @@ def run(output, device, seeds=(42, 43, 44), repeats=5, iterations=25):
             report["runs"].append(row)
             (output / "summary.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
             print(f"{name}: {row['status']}", flush=True)
+    report["complete"] = True
+    report["passed"] = bool(report["runs"]) and all(row["status"] == "completed" for row in report["runs"])
+    (output / "summary.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     return report
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", required=True, choices=["cpu", "mps", "cuda"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=25)
-    args = parser.parse_args()
-    run(args.output, args.device, args.seeds, args.repeats, args.iterations)
+    args = parser.parse_args(argv)
+    report = run(args.output, args.device, args.seeds, args.repeats, args.iterations)
+    return 0 if report["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
