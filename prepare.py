@@ -13,15 +13,19 @@ def _module_available(name: str) -> bool:
 def collect_environment_report():
     torch_available = _module_available("torch")
     cuda_available = False
+    mps_available = False
     if torch_available:
         import torch
 
         cuda_available = bool(torch.cuda.is_available())
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        mps_available = bool(mps and mps.is_available())
 
     return {
         "python_version": sys.version.split()[0],
         "torch_available": torch_available,
         "cuda_available": cuda_available,
+        "mps_available": mps_available,
         "triton_available": _module_available("triton"),
         "ncu_available": shutil.which("ncu") is not None,
         "nvcc_available": shutil.which("nvcc") is not None,
@@ -40,6 +44,9 @@ def resolve_device(requested_device: Optional[str] = None) -> str:
             raise RuntimeError("CUDA was requested, but PyTorch is not installed in this environment.")
         if not report["cuda_available"]:
             raise RuntimeError("CUDA was requested, but no CUDA-capable device is available.")
+
+    if normalized.startswith("mps") and not collect_environment_report()["mps_available"]:
+        raise RuntimeError("MPS was requested, but no Apple Metal device is available.")
 
     return normalized
 

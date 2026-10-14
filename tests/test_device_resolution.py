@@ -44,6 +44,15 @@ class ResolveDeviceTests(unittest.TestCase):
     def test_explicit_cpu_is_preserved(self) -> None:
         self.assertEqual(self.prepare.resolve_device("cpu"), "cpu")
 
+    def test_explicit_mps_requires_available_backend(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "no Apple Metal device"):
+            self.prepare.resolve_device("mps")
+        sys.modules["torch"].backends = types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: True)
+        )
+        self.assertEqual(self.prepare.resolve_device("mps"), "mps")
+        self.assertTrue(self.prepare.collect_environment_report()["mps_available"])
+
 
 class CliDefaultTests(unittest.TestCase):
     def setUp(self) -> None:
